@@ -12,10 +12,11 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Завантаження товарів з сервера
+  // Завантаження товарів з сервера (ТЕПЕР З ІНТЕРНЕТУ)
   const fetchProducts = async () => {
     try {
-      const res = await axios.get('http://localhost:5000/products');
+      // 👇 ТУТ ЗМІНЕНО:
+      const res = await axios.get('https://solder-warehouse.onrender.com/products');
       setProducts(res.data);
     } catch (error) {
       console.error("Сервер не відповідає:", error);
@@ -36,7 +37,8 @@ function App() {
 
     setLoading(true);
     try {
-      await axios.post('http://localhost:5000/upload', formData, {
+      // 👇 ТУТ ТЕЖ ЗМІНЕНО:
+      await axios.post('https://solder-warehouse.onrender.com/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       alert('✅ Файл успішно завантажено!');
