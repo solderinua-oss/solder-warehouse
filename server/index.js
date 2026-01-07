@@ -42,11 +42,24 @@ app.post('/upload', upload.single('file'), async (req, res) => {
 
         let updatedCount = 0;
         for (const item of data) {
-            // --- ОСЬ ТУТ МАГІЯ ДЛЯ ТВОГО ФАЙЛУ ---
-            // Ми шукаємо колонки з твого скріншоту
-            const name = item['Название(RU)'] || item['Название'] || item['name'];
-            const quantity = item['Количество'] || item['quantity'] || 0;
-            const price = item['Цена'] || item['Price'] || 0;
+            // --- ОСЬ ТУТ ОНОВЛЕНА МАГІЯ ДЛЯ НОВОГО ФАЙЛУ ---
+            
+            // 1. Назва (шукаємо різні варіанти)
+            const name = item['Название'] || item['Название(RU)'] || item['name'] || item['Name'];
+            
+            // 2. Кількість (шукаємо "В наличии" або "Количество")
+            const quantity = item['В наличии'] || item['Количество'] || item['quantity'] || item['Quantity'] || 0;
+            
+            // 3. Ціна закупки (шукаємо "Цена закупки")
+            // Якщо немає, спробуємо знайти просто "Закупка"
+            const buyingPrice = item['Цена закупки'] || item['BuyingPrice'] || item['Закупка'] || 0;
+            
+            // 4. Ціна продажу (шукаємо "Цена продажи")
+            // Якщо її немає, беремо ціну закупки, щоб не було нуля
+            const sellingPrice = item['Цена продажи'] || item['SellingPrice'] || item['Продажа'] || buyingPrice;
+
+            // 5. Категорія
+            const category = item['Категория'] || item['Category'] || 'Склад';
 
             if (name) {
                 await Product.findOneAndUpdate(
@@ -54,9 +67,9 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                     {
                         name: name,
                         quantity: quantity,
-                        buyingPrice: price, // Записуємо ціну з файлу
-                        sellingPrice: price, // Записуємо ту ж ціну
-                        category: 'Склад'    // Ставимо загальну категорію
+                        buyingPrice: buyingPrice, // Тепер це реальна собівартість
+                        sellingPrice: sellingPrice, // А це реальна ціна для клієнта
+                        category: category
                     },
                     { upsert: true, new: true }
                 );
@@ -65,7 +78,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         }
 
         fs.unlinkSync(req.file.path);
-        res.json({ message: `Успішно завантажено ${updatedCount} товарів!` });
+        res.json({ message: `Успішно завантажено ${updatedCount} товарів! Ціни оновлено.` });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Помилка обробки файлу' });
