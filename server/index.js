@@ -24,7 +24,7 @@ const ProductSchema = new mongoose.Schema({
     buyingPrice: { type: Number, default: 0 },
     sellingPrice: { type: Number, default: 0 },
     category: { type: String, default: 'Склад' },
-    owner: { type: String, default: 'Спільне' } // 👈 Нове поле: Власник
+    owner: { type: String, default: 'Shared' } 
 });
 const Product = mongoose.model('Product', ProductSchema);
 
@@ -36,9 +36,34 @@ const SaleSchema = new mongoose.Schema({
     soldPrice: Number,
     buyingPriceAtSale: Number,
     profit: Number,
-    owner: { type: String, default: 'Спільне' } // 👈 Зберігаємо власника угоди
+    owner: { type: String, default: 'Shared' }
 });
 const Sale = mongoose.model('Sale', SaleSchema);
+
+// --- 🛠 ХЕЛПЕРИ ---
+
+// 1. Очищення цін від пробілів та сміття (ГОЛОВНЕ ВИПРАВЛЕННЯ)
+const cleanNumber = (value) => {
+    if (!value) return 0;
+    // Перетворюємо в рядок, видаляємо все крім цифр, коми і крапки
+    const cleanStr = String(value).replace(/[^0-9.,]/g, '').replace(',', '.');
+    return parseFloat(cleanStr) || 0;
+};
+
+// 2. Визначення власника (точно під твій файл)
+const determineOwner = (row) => {
+    // Шукаємо колонку "Доля" (твоя точна назва з файлу)
+    const rawValue = row['Доля'] || row['доля'] || row['Share'] || row['Владелец'];
+    
+    if (!rawValue) return 'Shared';
+
+    const v = String(rawValue).toLowerCase().trim();
+    
+    if (v.includes('я') || v.includes('богдан') || v.includes('my')) return 'Me';
+    if (v.includes('отец') || v.includes('папа') || v.includes('батько')) return 'Father';
+    
+    return 'Shared';
+};
 
 // --- МАРШРУТИ ---
 
@@ -47,7 +72,7 @@ app.get('/products', async (req, res) => {
     res.json(products);
 });
 
-// 🔥 ОНОВЛЕНА СТАТИСТИКА З РОЗПОДІЛОМ ПРИБУТКУ
+// СТАТИСТИКА
 app.get('/sales-stats', async (req, res) => {
     try {
         const sales = await Sale.find();
@@ -55,8 +80,6 @@ app.get('/sales-stats', async (req, res) => {
         let totalProfit = 0;
         let totalRevenue = 0;
         let totalSalesCount = 0;
-
-        // Скарбнички для часток
         let myShare = 0;
         let fatherShare = 0;
 
@@ -66,14 +89,11 @@ app.get('/sales-stats', async (req, res) => {
             totalRevenue += (sale.soldPrice * sale.quantity);
             totalSalesCount += sale.quantity;
 
-            // 💰 ГОЛОВНА ЛОГІКА РОЗПОДІЛУ
-            if (sale.owner && (sale.owner.toLowerCase().includes('я') || sale.owner.toLowerCase().includes('богдан'))) {
-                myShare += profit; 
-            } 
-            else if (sale.owner && (sale.owner.toLowerCase().includes('отец') || sale.owner.toLowerCase().includes('папа') || sale.owner.toLowerCase().includes('батько'))) {
+            if (sale.owner === 'Me') {
+                myShare += profit;
+            } else if (sale.owner === 'Father') {
                 fatherShare += profit;
-            } 
-            else {
+            } else {
                 myShare += profit / 2;
                 fatherShare += profit / 2;
             }
@@ -101,42 +121,29 @@ app.get('/sales-history', async (req, res) => {
     }
 });
 
-// 🔥 ОНОВЛЕНЕ ЗАВАНТАЖЕННЯ СКЛАДУ (З ДІАГНОСТИКОЮ)
+// 🔥 ЗАВАНТАЖЕННЯ СКЛАДУ (Фікс цін + власники)
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
-        console.log('🔍 ПОЧИНАЮ АНАЛІЗ ФАЙЛУ СКЛАДУ...');
-        
-        // 1. ПОКАЗУЄМО ПЕРШИЙ РЯДОК (Щоб побачити назви колонок)
-        if (data.length > 0) {
-            console.log('📋 ПРИКЛАД ДАНИХ (Перший товар):');
-            console.log(JSON.stringify(data[0], null, 2));
-        }
-
         let updatedCount = 0;
         for (const item of data) {
-            const name = item['Название'] || item['Название(RU)'] || item['name'] || item['Name'];
-            const article = item['Артикул'] || item['Article'] || item['sku'] || '';
-            const quantity = item['В наличии'] || item['Количество'] || item['quantity'] || 0;
-            const buyingPrice = item['Цена закупки'] || item['BuyingPrice'] || item['Закупка'] || 0;
-            const sellingPrice = item['Цена продажи'] || item['SellingPrice'] || item['Продажа'] || buyingPrice;
-            const category = item['Категория'] || item['Category'] || 'Склад';
+            // Твої точні назви колонок з файлу
+            const name = item['Название'];
             
-            // 👇 ТУТ МИ ШУКАЄМО ВЛАСНИКА (Перевіряємо всі варіанти)
-            const owner = item['Доля'] || item['доля'] || item['Share'] || item['share'] || item['Владелец'] || 'Спільне';
-
-            // 2. ДІАГНОСТИКА КОНКРЕТНОГО ТОВАРУ
-            if (name && name.toLowerCase().includes('toolkitrc m6d')) {
-                console.log(`🧐 ЗНАЙШОВ TOOLKITRC!`);
-                console.log(`-- Значення "Доля": "${item['Доля']}"`);
-                console.log(`-- Значення "Share": "${item['Share']}"`);
-                console.log(`-- Що піде в базу (змінна owner): "${owner}"`);
-            }
-
             if (name) {
+                // Використовуємо cleanNumber, щоб виправити "1 200" -> 1200
+                const buyingPrice = cleanNumber(item['Цена закупки']);
+                const sellingPrice = cleanNumber(item['Цена продажи']);
+                const quantity = cleanNumber(item['В наличии']);
+                
+                const article = item['Артикул'] ? String(item['Артикул']) : '';
+                const category = item['Категория'] || 'Склад';
+                
+                const owner = determineOwner(item);
+
                 await Product.findOneAndUpdate(
                     { name: name },
                     { name, article, quantity, buyingPrice, sellingPrice, category, owner },
@@ -146,14 +153,14 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             }
         }
         fs.unlinkSync(req.file.path);
-        res.json({ message: `Оновлено ${updatedCount} товарів на складі!` });
+        res.json({ message: `Оновлено ${updatedCount} товарів. Ціни перераховано.` });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Помилка обробки файлу' });
     }
 });
 
-// 🔥 ЗАВАНТАЖЕННЯ ПРОДАЖІВ
+// ЗАВАНТАЖЕННЯ ПРОДАЖІВ
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
@@ -168,45 +175,53 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
         let profitAdded = 0;
 
         for (const item of data) {
-            const rawStatus = item['Статус'] || item['Статус заказа'] || '';
-            const status = rawStatus.toString().trim();
-            const name = item['Товар'] || item['Название товара'];
-            const quantity = item['Кол-во'] || item['Количество'] || 1;
-            const soldPrice = item['Цена продажи (за 1)'] || item['Цена продажи'] || 0; 
-            
-            let buyingPrice = item['Себестоимость позиции'] || item['Себестоимость'] || 0;
-            let profit = item['Прибыль позиции'] || item['Прибыль'];
-            let owner = 'Спільне';
+            // Універсальний пошук колонок для звіту продажів
+            const keys = Object.keys(item);
+            const findKey = (search) => keys.find(k => k.toLowerCase().trim().includes(search));
 
-            const article = item['Артикул'];
-            let product = null;
-            
-            if (article) product = await Product.findOne({ article: article });
-            if (!product && name) product = await Product.findOne({ name: name });
+            const nameKey = findKey('товар') || findKey('название');
+            const name = item[nameKey];
 
-            if (product) {
-                if (!buyingPrice) buyingPrice = product.buyingPrice;
-                if (product.owner) owner = product.owner; 
-            }
+            if (name) {
+                const statusKey = findKey('статус');
+                const status = item[statusKey] ? String(item[statusKey]).trim() : '';
+                
+                const qty = cleanNumber(item[findKey('кол-во') || findKey('количество')]);
+                const soldPrice = cleanNumber(item[findKey('цена продажи')]);
+                
+                let buyingPrice = cleanNumber(item[findKey('себестоимость')]);
+                let profit = cleanNumber(item[findKey('прибыль')]);
+                let owner = 'Shared';
 
-            if (!profit) profit = (soldPrice - buyingPrice) * quantity;
+                const article = item[findKey('артикул')];
+                let product = null;
+                
+                if (article) product = await Product.findOne({ article: article });
+                if (!product) product = await Product.findOne({ name: name });
 
-            const isDelivered = status.toLowerCase().includes('доставлен') || status.toLowerCase().includes('выполнен');
+                if (product) {
+                    if (!buyingPrice) buyingPrice = product.buyingPrice;
+                    owner = product.owner || 'Shared';
+                }
 
-            if (isDelivered && name) {
-                await Sale.create({
-                    orderStatus: status,
-                    productName: name,
-                    quantity: quantity,
-                    soldPrice: soldPrice,
-                    buyingPriceAtSale: buyingPrice,
-                    profit: profit, 
-                    owner: owner, 
-                    date: new Date()
-                });
+                if (!profit) profit = (soldPrice - buyingPrice) * qty;
 
-                salesCount++;
-                profitAdded += profit;
+                const isDelivered = status.toLowerCase().includes('доставлен') || status.toLowerCase().includes('выполнен');
+
+                if (isDelivered) {
+                    await Sale.create({
+                        orderStatus: status,
+                        productName: name,
+                        quantity: qty,
+                        soldPrice: soldPrice,
+                        buyingPriceAtSale: buyingPrice,
+                        profit: profit, 
+                        owner: owner, 
+                        date: new Date()
+                    });
+                    salesCount++;
+                    profitAdded += profit;
+                }
             }
         }
 
