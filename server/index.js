@@ -28,7 +28,7 @@ const Product = mongoose.model('Product', ProductSchema);
 
 const SaleSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now },
-    orderStatus: String, // "Доставлено"
+    orderStatus: String,
     productName: String,
     quantity: Number,
     soldPrice: Number,
@@ -44,7 +44,6 @@ app.get('/products', async (req, res) => {
     res.json(products);
 });
 
-// Статистика (Загальна сума)
 app.get('/sales-stats', async (req, res) => {
     try {
         const sales = await Sale.find();
@@ -58,10 +57,8 @@ app.get('/sales-stats', async (req, res) => {
     }
 });
 
-// 🔥 НОВЕ: Отримати детальну історію продажів
 app.get('/sales-history', async (req, res) => {
     try {
-        // Сортуємо: останні продажі зверху
         const sales = await Sale.find().sort({ date: -1 });
         res.json(sales);
     } catch (error) {
@@ -69,7 +66,6 @@ app.get('/sales-history', async (req, res) => {
     }
 });
 
-// Завантаження СКЛАДУ
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
@@ -101,36 +97,38 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// 🚀 Завантаження ПРОДАЖІВ (З фільтром "Доставлено")
+// 🚀 ВИПРАВЛЕНИЙ МАРШРУТ ПРОДАЖІВ
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
-        await Sale.deleteMany({}); // Очищаємо стару історію
+        await Sale.deleteMany({}); 
 
         let salesCount = 0;
         let profitAdded = 0;
 
         for (const item of data) {
-            // Читаємо статус і дані
-            const status = item['Статус заказа']; // Колонка А з твого скріншоту
+            const rawStatus = item['Статус заказа'];
+            // 👇 Робимо статус "чистим" (прибираємо пробіли) і перевіряємо чи він МІСТИТЬ слово "Доставлен"
+            // Це зловить і "Доставлен", і "Доставлено", і " доставлено "
+            const status = rawStatus ? rawStatus.toString().trim() : '';
+            
             const name = item['Товар'];
             const quantity = item['Кол-во этого товара'] || 0;
             const soldPrice = item['Цена (за 1)'] || 0; 
             
-            // 🔥 ГОЛОВНА ПЕРЕВІРКА: Рахуємо тільки "Доставлено"
-            if (status === 'Доставлено' && name && quantity > 0) {
+            // Шукаємо частинку слова 'Доставлен'
+            if (status.includes('Доставлен') && name && quantity > 0) {
                 
                 const product = await Product.findOne({ name: name });
                 const buyingPrice = product ? product.buyingPrice : 0;
                 
-                // Рахуємо чистий навар
                 const profit = (soldPrice - buyingPrice) * quantity;
 
                 await Sale.create({
-                    orderStatus: status,
+                    orderStatus: status, // Записуємо як є в файлі
                     productName: name,
                     quantity: quantity,
                     soldPrice: soldPrice,
@@ -145,7 +143,7 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
         }
 
         fs.unlinkSync(req.file.path);
-        res.json({ message: `Враховано ${salesCount} замовлень (Тільки 'Доставлено'). Прибуток: ${profitAdded.toFixed(2)} ₴` });
+        res.json({ message: `Враховано ${salesCount} замовлень. Прибуток: ${profitAdded.toFixed(2)} ₴` });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Помилка обробки продажів' });
