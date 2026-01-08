@@ -26,9 +26,9 @@ const ProductSchema = new mongoose.Schema({
 });
 const Product = mongoose.model('Product', ProductSchema);
 
-// Модель для ПРОДАЖІВ
 const SaleSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now },
+    orderStatus: String, // "Доставлено"
     productName: String,
     quantity: Number,
     soldPrice: Number,
@@ -44,7 +44,7 @@ app.get('/products', async (req, res) => {
     res.json(products);
 });
 
-// Статистика ПРОДАЖІВ
+// Статистика (Загальна сума)
 app.get('/sales-stats', async (req, res) => {
     try {
         const sales = await Sale.find();
@@ -52,17 +52,24 @@ app.get('/sales-stats', async (req, res) => {
         const totalRevenue = sales.reduce((acc, sale) => acc + (sale.soldPrice * sale.quantity), 0);
         const totalSalesCount = sales.reduce((acc, sale) => acc + sale.quantity, 0);
 
-        res.json({
-            profit: totalProfit,
-            revenue: totalRevenue,
-            count: totalSalesCount
-        });
+        res.json({ profit: totalProfit, revenue: totalRevenue, count: totalSalesCount });
     } catch (error) {
         res.status(500).json({ message: 'Помилка статистики' });
     }
 });
 
-// Завантаження СКЛАДУ (Товари)
+// 🔥 НОВЕ: Отримати детальну історію продажів
+app.get('/sales-history', async (req, res) => {
+    try {
+        // Сортуємо: останні продажі зверху
+        const sales = await Sale.find().sort({ date: -1 });
+        res.json(sales);
+    } catch (error) {
+        res.status(500).json({ message: 'Помилка отримання історії' });
+    }
+});
+
+// Завантаження СКЛАДУ
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
@@ -94,38 +101,36 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// 🚀 Завантаження ПРОДАЖІВ (Твій новий файл)
+// 🚀 Завантаження ПРОДАЖІВ (З фільтром "Доставлено")
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
-        // Очищаємо історію перед новим завантаженням (щоб не дублювати)
-        await Sale.deleteMany({}); 
+        await Sale.deleteMany({}); // Очищаємо стару історію
 
         let salesCount = 0;
         let profitAdded = 0;
 
         for (const item of data) {
-            // 👇 Читаємо твій новий файл (як на скріншоті)
+            // Читаємо статус і дані
+            const status = item['Статус заказа']; // Колонка А з твого скріншоту
             const name = item['Товар'];
             const quantity = item['Кол-во этого товара'] || 0;
             const soldPrice = item['Цена (за 1)'] || 0; 
             
-            // Якщо товару немає назви або к-сті - пропускаємо
-            if (name && quantity > 0) {
-                // 1. Шукаємо товар на складі (щоб дізнатися за скільки ТИ його купив)
-                const product = await Product.findOne({ name: name });
+            // 🔥 ГОЛОВНА ПЕРЕВІРКА: Рахуємо тільки "Доставлено"
+            if (status === 'Доставлено' && name && quantity > 0) {
                 
-                // Якщо знайшли - беремо ціну закупки. Якщо ні - вважаємо закупку 0 (весь продаж = прибуток)
+                const product = await Product.findOne({ name: name });
                 const buyingPrice = product ? product.buyingPrice : 0;
                 
-                // 2. Рахуємо чистий навар
+                // Рахуємо чистий навар
                 const profit = (soldPrice - buyingPrice) * quantity;
 
-                // 3. Записуємо продаж
                 await Sale.create({
+                    orderStatus: status,
                     productName: name,
                     quantity: quantity,
                     soldPrice: soldPrice,
@@ -140,7 +145,7 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
         }
 
         fs.unlinkSync(req.file.path);
-        res.json({ message: `Оброблено ${salesCount} продажів. Чистий прибуток: ${profitAdded.toFixed(2)} ₴` });
+        res.json({ message: `Враховано ${salesCount} замовлень (Тільки 'Доставлено'). Прибуток: ${profitAdded.toFixed(2)} ₴` });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Помилка обробки продажів' });
