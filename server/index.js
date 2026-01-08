@@ -40,13 +40,19 @@ const SaleSchema = new mongoose.Schema({
 });
 const Sale = mongoose.model('Sale', SaleSchema);
 
-// --- 📧 ПОВЕРТАЄМОСЯ ДО 'service: gmail' (ВОНО МАЄ ЗАПРАЦЮВАТИ) ---
+// --- 📧 НАЛАШТУВАННЯ З ФІКСОМ IPv4 ---
 const transporter = nodemailer.createTransport({
-    service: 'gmail', // 👈 Розумне авто-налаштування
+    service: 'gmail',
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
-    }
+    },
+    // 🔥 МАГІЧНИЙ РЯДОК: Вимикаємо IPv6, який глючить на Render
+    family: 4, 
+    // Додаткові налаштування для стабільності
+    pool: true, 
+    maxConnections: 1,
+    rateLimit: 1
 });
 
 // --- ФУНКЦІЯ: ГЕНЕРАЦІЯ ТА ВІДПРАВКА ЗВІТУ ---
@@ -95,6 +101,8 @@ const sendMonthlyReport = async () => {
         const fileName = `Report_${new Date().toISOString().split('T')[0]}.xlsx`;
         xlsx.writeFile(wb, fileName);
 
+        console.log('📨 Спроба підключення до Gmail...');
+        
         // 4. Відправляємо
         await transporter.sendMail({
             from: process.env.EMAIL_USER,
