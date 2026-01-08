@@ -2,14 +2,15 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
-import { Upload, Package, DollarSign, TrendingUp, RefreshCw, Search, ShoppingCart, History, CheckCircle } from 'lucide-react';
+import { Upload, Package, TrendingUp, RefreshCw, Search, ShoppingCart, History, CheckCircle, User, Users } from 'lucide-react';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
 function App() {
   const [products, setProducts] = useState([]);
-  const [salesStats, setSalesStats] = useState({ profit: 0, revenue: 0, count: 0 });
-  const [salesHistory, setSalesHistory] = useState([]); // Історія продажів
+  // Додали поля myShare та fatherShare у початковий стан
+  const [salesStats, setSalesStats] = useState({ profit: 0, revenue: 0, count: 0, myShare: 0, fatherShare: 0 });
+  const [salesHistory, setSalesHistory] = useState([]); 
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -55,7 +56,7 @@ function App() {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       alert('✅ Файл успішно оброблено!');
-      fetchData();
+      fetchData(); // Оновлюємо дані відразу після завантаження
     } catch (error) {
       alert('❌ Помилка завантаження');
     }
@@ -65,10 +66,11 @@ function App() {
   const totalStockRevenue = products.reduce((acc, item) => acc + (item.quantity * item.sellingPrice), 0);
   const potentialProfit = products.reduce((acc, item) => acc + (item.quantity * (item.sellingPrice - item.buyingPrice)), 0);
 
+  // Графік тепер показує реальне співвідношення заробітку
   const chartData = {
-    labels: ['Мій капітал', 'Капітал батька'],
+    labels: ['Мій прибуток', 'Прибуток батька'],
     datasets: [{
-      data: [totalStockRevenue * 0.5, totalStockRevenue * 0.5],
+      data: [salesStats.myShare || 1, salesStats.fatherShare || 1], // Щоб графік не був пустим
       backgroundColor: ['#3b82f6', '#ef4444'],
       borderColor: ['#1e293b', '#1e293b'],
       borderWidth: 2,
@@ -93,8 +95,8 @@ function App() {
           </button>
         </div>
 
-        {/* --- БЛОК 1: РЕАЛЬНИЙ ЗАРОБІТОК --- */}
-        <div className="bg-gradient-to-r from-emerald-900/50 to-slate-800 p-6 rounded-3xl border border-emerald-500/30">
+        {/* --- БЛОК 1: РЕАЛЬНИЙ ЗАРОБІТОК (ЗАГАЛЬНИЙ) --- */}
+        <div className="bg-gradient-to-r from-emerald-900/50 to-slate-800 p-6 rounded-3xl border border-emerald-500/30 shadow-lg">
           <div className="flex flex-col md:flex-row justify-between items-center gap-6">
             <div className="flex items-center gap-6">
                 <div className="p-4 bg-emerald-500 rounded-2xl text-slate-900 shadow-[0_0_20px_rgba(16,185,129,0.3)]">
@@ -102,13 +104,13 @@ function App() {
                 </div>
                 <div>
                     <p className="text-emerald-400 font-medium tracking-wide uppercase text-sm">Реальний чистий прибуток</p>
-                    <h2 className="text-4xl font-bold text-white mt-1">+{salesStats.profit.toLocaleString()} ₴</h2>
+                    <h2 className="text-5xl font-extrabold text-white mt-1 tracking-tight">+{salesStats.profit.toLocaleString()} ₴</h2>
                     <p className="text-slate-400 text-sm mt-1">Тільки "Доставлені" ({salesStats.count} шт)</p>
                 </div>
             </div>
             <div className="relative group">
                 <input type="file" onChange={handleSalesUpload} className="absolute inset-0 opacity-0 cursor-pointer z-10" accept=".xlsx, .xls" />
-                <button className="flex items-center gap-3 bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-4 rounded-xl font-bold transition shadow-lg group-hover:scale-105">
+                <button className="flex items-center gap-3 bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-4 rounded-xl font-bold transition shadow-lg group-hover:scale-105">
                     <ShoppingCart size={24} />
                     {loading ? "Рахую..." : "Завантажити Звіт Продажів"}
                 </button>
@@ -116,7 +118,32 @@ function App() {
           </div>
         </div>
 
-        {/* --- НОВЕ: ДЕТАЛЬНА ІСТОРІЯ ПРОДАЖІВ --- */}
+        {/* --- 🔥 НОВЕ: РОЗДІЛЕННЯ ПРИБУТКУ --- */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Твоя Частка */}
+            <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 flex items-center space-x-5 hover:border-blue-500 transition duration-300">
+                <div className="p-4 bg-blue-500/20 rounded-xl text-blue-400">
+                    <User size={32} />
+                </div>
+                <div>
+                    <p className="text-slate-400 text-sm font-medium uppercase">Мій чистий навар</p>
+                    <h3 className="text-3xl font-bold text-blue-400">+{salesStats.myShare.toLocaleString()} ₴</h3>
+                </div>
+            </div>
+
+            {/* Частка Батька */}
+            <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 flex items-center space-x-5 hover:border-red-500 transition duration-300">
+                <div className="p-4 bg-red-500/20 rounded-xl text-red-400">
+                    <Users size={32} />
+                </div>
+                <div>
+                    <p className="text-slate-400 text-sm font-medium uppercase">Навар Батька</p>
+                    <h3 className="text-3xl font-bold text-red-400">+{salesStats.fatherShare.toLocaleString()} ₴</h3>
+                </div>
+            </div>
+        </div>
+
+        {/* --- ДЕТАЛЬНА ІСТОРІЯ ПРОДАЖІВ --- */}
         {salesHistory.length > 0 && (
           <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700">
              <div className="flex items-center space-x-3 mb-4">
@@ -130,6 +157,7 @@ function App() {
                       <th className="p-3">Товар</th>
                       <th className="p-3">К-сть</th>
                       <th className="p-3">Ціна продажу</th>
+                      <th className="p-3">Власник</th> {/* Нова колонка */}
                       <th className="p-3">Статус</th>
                       <th className="p-3 text-right">Чистий навар</th>
                     </tr>
@@ -140,6 +168,7 @@ function App() {
                         <td className="p-3 font-medium text-slate-200">{sale.productName}</td>
                         <td className="p-3 text-blue-300">{sale.quantity} шт</td>
                         <td className="p-3 text-slate-400">{sale.soldPrice} ₴</td>
+                        <td className="p-3 text-slate-500 text-xs uppercase font-bold">{sale.owner || '—'}</td>
                         <td className="p-3">
                             <span className="bg-green-500/20 text-green-400 px-2 py-1 rounded-full text-xs font-bold">
                                 {sale.orderStatus}
@@ -187,7 +216,7 @@ function App() {
         {/* ГРАФІК І ТАБЛИЦЯ СКЛАДУ */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 flex flex-col items-center">
-            <h3 className="text-xl font-bold mb-4">Баланс активів</h3>
+            <h3 className="text-xl font-bold mb-4">Розподіл прибутку</h3>
             <div className="w-56 h-56"><Doughnut data={chartData} /></div>
           </div>
 
@@ -209,6 +238,7 @@ function App() {
                     <th className="p-3">К-сть</th>
                     <th className="p-3">Закупка</th>
                     <th className="p-3">Продаж</th>
+                    <th className="p-3">Доля</th> {/* Колонка Доля */}
                     <th className="p-3">Маржа</th>
                   </tr>
                 </thead>
@@ -219,6 +249,7 @@ function App() {
                       <td className="p-3 font-bold text-blue-400">{p.quantity}</td>
                       <td className="p-3 text-slate-400">{p.buyingPrice} ₴</td>
                       <td className="p-3 text-white">{p.sellingPrice} ₴</td>
+                      <td className="p-3 text-xs text-slate-500 uppercase">{p.owner || '—'}</td>
                       <td className="p-3 text-green-400">+{p.sellingPrice - p.buyingPrice} ₴</td>
                     </tr>
                   ))}
