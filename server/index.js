@@ -5,8 +5,6 @@ const cors = require('cors');
 const multer = require('multer');
 const xlsx = require('xlsx');
 const fs = require('fs');
-const nodemailer = require('nodemailer');
-const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -40,105 +38,7 @@ const SaleSchema = new mongoose.Schema({
 });
 const Sale = mongoose.model('Sale', SaleSchema);
 
-// --- 📧 НАЛАШТУВАННЯ З ФІКСОМ IPv4 ---
-const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    },
-    // 🔥 МАГІЧНИЙ РЯДОК: Вимикаємо IPv6, який глючить на Render
-    family: 4, 
-    // Додаткові налаштування для стабільності
-    pool: true, 
-    maxConnections: 1,
-    rateLimit: 1
-});
-
-// --- ФУНКЦІЯ: ГЕНЕРАЦІЯ ТА ВІДПРАВКА ЗВІТУ ---
-const sendMonthlyReport = async () => {
-    console.log('⏳ Починаю генерацію звіту...');
-    try {
-        const sales = await Sale.find();
-        
-        // 1. Рахуємо статистику
-        const productStats = {};
-        let totalRevenue = 0;
-        let totalProfit = 0;
-
-        sales.forEach(sale => {
-            const name = sale.productName || 'Невідомий товар';
-            if (!productStats[name]) {
-                productStats[name] = { qty: 0, revenue: 0, profit: 0 };
-            }
-            productStats[name].qty += sale.quantity;
-            productStats[name].revenue += (sale.soldPrice * sale.quantity);
-            productStats[name].profit += sale.profit;
-
-            totalRevenue += (sale.soldPrice * sale.quantity);
-            totalProfit += sale.profit;
-        });
-
-        // 2. Готуємо дані для Excel
-        const excelData = [
-            ['ЗАГАЛЬНА СТАТИСТИКА'],
-            ['Всього дохід:', totalRevenue.toFixed(2) + ' грн'],
-            ['Чистий прибуток:', totalProfit.toFixed(2) + ' грн'],
-            ['Всього продажів:', sales.length],
-            [],
-            ['ДЕТАЛІЗАЦІЯ ПО ТОВАРАХ'],
-            ['Товар', 'Продано (шт)', 'Виручка (грн)', 'Прибуток (грн)']
-        ];
-
-        for (const [name, stat] of Object.entries(productStats)) {
-            excelData.push([name, stat.qty, stat.revenue.toFixed(2), stat.profit.toFixed(2)]);
-        }
-
-        // 3. Створюємо файл
-        const ws = xlsx.utils.aoa_to_sheet(excelData);
-        const wb = xlsx.utils.book_new();
-        xlsx.utils.book_append_sheet(wb, ws, "Звіт");
-        const fileName = `Report_${new Date().toISOString().split('T')[0]}.xlsx`;
-        xlsx.writeFile(wb, fileName);
-
-        console.log('📨 Спроба підключення до Gmail...');
-        
-        // 4. Відправляємо
-        await transporter.sendMail({
-            from: process.env.EMAIL_USER,
-            to: process.env.EMAIL_USER,
-            subject: `📊 Solder Warehouse: Твій звіт`,
-            text: `Привіт! Ось статистика продажів. Чистий прибуток: ${totalProfit.toFixed(2)} грн.`,
-            attachments: [{ path: fileName }]
-        });
-
-        console.log('✅ Лист успішно відправлено!');
-        fs.unlinkSync(fileName); 
-    } catch (error) {
-        console.error('❌ Помилка відправки:', error);
-        throw error;
-    }
-};
-
-// ⏰ ПЛАНУВАЛЬНИК: Щодня о 02:40 (Київський час)
-cron.schedule('40 2 * * *', () => {
-    console.log('⏰ Час прийшов! Відправляю звіт...');
-    sendMonthlyReport();
-}, {
-    scheduled: true,
-    timezone: "Europe/Kiev"
-});
-
 // --- МАРШРУТИ ---
-
-app.get('/send-report-now', async (req, res) => {
-    try {
-        await sendMonthlyReport();
-        res.send('✅ Звіт відправлено вручну! Перевір пошту (і спам).');
-    } catch (error) {
-        res.status(500).send('Помилка при відправці: ' + error.message);
-    }
-});
 
 app.get('/products', async (req, res) => {
     const products = await Product.find();
@@ -199,23 +99,30 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
+// 🔥 ОСНОВНИЙ МАРШРУТ (Завантаження звіту про прибуток)
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
+        
         let sheetName = workbook.SheetNames.find(n => n.includes('позици') || n.includes('Items')) || workbook.SheetNames[0];
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
         await Sale.deleteMany({}); 
+
         let salesCount = 0;
         let profitAdded = 0;
+
         for (const item of data) {
             const rawStatus = item['Статус'] || item['Статус заказа'] || '';
             const status = rawStatus.toString().trim();
             const name = item['Товар'] || item['Название товара'];
             const quantity = item['Кол-во'] || item['Количество'] || 1;
             const soldPrice = item['Цена продажи (за 1)'] || item['Цена продажи'] || 0; 
+            
             let buyingPrice = item['Себестоимость позиции'] || item['Себестоимость'] || 0;
             let profit = item['Прибыль позиции'] || item['Прибыль'];
+
             if (!buyingPrice && !profit) {
                 const article = item['Артикул'];
                 let product = null;
@@ -223,8 +130,11 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
                 if (!product && name) product = await Product.findOne({ name: name });
                 if (product) buyingPrice = product.buyingPrice;
             }
+
             if (!profit) profit = (soldPrice - buyingPrice) * quantity;
+
             const isDelivered = status.toLowerCase().includes('доставлен') || status.toLowerCase().includes('выполнен');
+
             if (isDelivered && name) {
                 await Sale.create({
                     orderStatus: status,
@@ -235,10 +145,12 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
                     profit: profit, 
                     date: new Date()
                 });
+
                 salesCount++;
                 profitAdded += profit;
             }
         }
+
         fs.unlinkSync(req.file.path);
         res.json({ message: `Оброблено ${salesCount} позицій. Прибуток: ${profitAdded.toFixed(2)} ₴` });
     } catch (error) {
