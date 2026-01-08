@@ -50,7 +50,7 @@ function App() {
     setLoading(false);
   };
 
-  // --- ЛОГІКА ДЛЯ ГРАФІКА КАПІТАЛУ (Залишаємо для "Балансу активів") ---
+  // --- ЛОГІКА ДЛЯ ГРАФІКА КАПІТАЛУ ---
   let myCapital = 0;
   let fatherCapital = 0;
   let totalStockCost = 0;
@@ -126,7 +126,7 @@ function App() {
           </div>
         </div>
 
-        {/* --- ДЕТАЛЬНА ІСТОРІЯ УГОД (Без розподілу) --- */}
+        {/* --- ІСТОРІЯ УГОД --- */}
         {salesHistory.length > 0 && (
           <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700">
              <div className="flex items-center space-x-3 mb-6">
@@ -197,28 +197,41 @@ function App() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           
           <div className="bg-slate-800 p-8 rounded-2xl border border-slate-700 flex flex-col items-center">
-            <h3 className="text-lg font-bold mb-6 w-full text-slate-300 uppercase tracking-wider">Баланс активів</h3>
+            <h3 className="text-lg font-bold mb-6 w-full text-slate-300 uppercase tracking-wider text-center">Баланс активів</h3>
             <div className="w-52 h-52 relative">
                 <Doughnut data={chartData} options={{ cutout: '75%', plugins: { legend: { display: false } } }} />
-                <div className="absolute inset-0 flex items-center justify-center flex-col">
+                <div className="absolute inset-0 flex items-center justify-center flex-col pointer-events-none">
                     <span className="text-slate-500 text-[10px] font-bold uppercase">Всього</span>
                     <span className="font-black text-white text-xl">{Math.round(totalStockCost / 1000)}k ₴</span>
                 </div>
             </div>
+            
+            {/* 🔥 ОБНОВЛЕННАЯ ЛЕГЕНДА С ГРИВНАМИ */}
             <div className="w-full mt-8 space-y-4">
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                        <div className="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>
-                        <span className="text-sm text-slate-400 font-medium">Мій капітал</span>
+                <div className="bg-slate-900/40 p-3 rounded-xl border border-slate-700/50">
+                    <div className="flex justify-between items-center mb-1">
+                        <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]"></div>
+                            <span className="text-xs text-slate-400 font-bold uppercase">Мій капітал</span>
+                        </div>
+                        <span className="text-xs font-black text-blue-400">{myPercent}%</span>
                     </div>
-                    <span className="font-bold text-sm">{myPercent}%</span>
+                    <div className="text-xl font-black text-white">
+                        {myCapital.toLocaleString()} <span className="text-sm font-normal text-slate-500">₴</span>
+                    </div>
                 </div>
-                <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-3">
-                        <div className="w-3 h-3 rounded-full bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]"></div>
-                        <span className="text-sm text-slate-400 font-medium">Капітал батька</span>
+
+                <div className="bg-slate-900/40 p-3 rounded-xl border border-slate-700/50">
+                    <div className="flex justify-between items-center mb-1">
+                        <div className="flex items-center gap-2">
+                            <div className="w-3 h-3 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]"></div>
+                            <span className="text-xs text-slate-400 font-bold uppercase">Капітал батька</span>
+                        </div>
+                        <span className="text-xs font-black text-red-400">{fatherPercent}%</span>
                     </div>
-                    <span className="font-bold text-sm">{fatherPercent}%</span>
+                    <div className="text-xl font-black text-white">
+                        {fatherCapital.toLocaleString()} <span className="text-sm font-normal text-slate-500">₴</span>
+                    </div>
                 </div>
             </div>
           </div>
@@ -233,7 +246,7 @@ function App() {
               </div>
             </div>
             
-            <div className="overflow-x-auto h-[400px] overflow-y-auto custom-scrollbar border border-slate-700/50 rounded-xl">
+            <div className="overflow-x-auto h-[480px] overflow-y-auto custom-scrollbar border border-slate-700/50 rounded-xl">
               <table className="w-full text-left border-collapse">
                 <thead className="sticky top-0 bg-slate-800 z-10 text-[10px] uppercase text-slate-500 font-black">
                   <tr className="border-b border-slate-700">
@@ -250,7 +263,11 @@ function App() {
                       <td className="p-4 text-slate-300 font-medium">{p.name}</td>
                       <td className="p-4 font-bold text-blue-400">{p.quantity}</td>
                       <td className="p-4 text-slate-500">{p.buyingPrice.toLocaleString()} ₴</td>
-                      <td className="p-4 text-[10px] font-black uppercase text-slate-600">{p.owner}</td>
+                      <td className="p-4">
+                        <span className={`text-[10px] font-black uppercase ${p.owner === 'Я' ? 'text-blue-400' : 'text-red-400'}`}>
+                            {p.owner}
+                        </span>
+                      </td>
                       <td className="p-4 text-right text-emerald-400 font-bold">+{ (p.sellingPrice - p.buyingPrice).toLocaleString() } ₴</td>
                     </tr>
                   ))}
