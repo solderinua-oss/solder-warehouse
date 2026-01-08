@@ -5,8 +5,8 @@ const cors = require('cors');
 const multer = require('multer');
 const xlsx = require('xlsx');
 const fs = require('fs');
-const nodemailer = require('nodemailer'); // 👈 Додано для пошти
-const cron = require('node-cron');        // 👈 Додано для таймера
+const nodemailer = require('nodemailer'); 
+const cron = require('node-cron');        
 
 const app = express();
 app.use(cors());
@@ -40,9 +40,11 @@ const SaleSchema = new mongoose.Schema({
 });
 const Sale = mongoose.model('Sale', SaleSchema);
 
-// --- 📧 НАЛАШТУВАННЯ ПОШТИ ---
+// --- 📧 ВИПРАВЛЕНІ НАЛАШТУВАННЯ ПОШТИ (SSL/465) ---
 const transporter = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com', // Явно вказуємо сервер Google
+    port: 465,              // Використовуємо захищений порт
+    secure: true,           // Вмикаємо шифрування
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -108,6 +110,7 @@ const sendMonthlyReport = async () => {
         fs.unlinkSync(fileName); 
     } catch (error) {
         console.error('❌ Помилка відправки:', error);
+        throw error; // Викидаємо помилку, щоб її було видно на сайті
     }
 };
 
@@ -122,7 +125,6 @@ cron.schedule('40 2 * * *', () => {
 
 // --- МАРШРУТИ ---
 
-// 👇 ТОЙ САМИЙ МАРШРУТ, ЯКОГО НЕ ВИСТАЧАЛО
 app.get('/send-report-now', async (req, res) => {
     try {
         await sendMonthlyReport();
