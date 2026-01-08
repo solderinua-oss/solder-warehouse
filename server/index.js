@@ -19,6 +19,7 @@ mongoose.connect(process.env.MONGO_URI)
 // --- МОДЕЛІ ---
 const ProductSchema = new mongoose.Schema({
     name: { type: String, required: true },
+    article: { type: String, default: '' },
     quantity: { type: Number, default: 0 },
     buyingPrice: { type: Number, default: 0 },
     sellingPrice: { type: Number, default: 0 },
@@ -75,6 +76,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
         let updatedCount = 0;
         for (const item of data) {
             const name = item['Название'] || item['Название(RU)'] || item['name'] || item['Name'];
+            const article = item['Артикул'] || item['Article'] || item['sku'] || '';
             const quantity = item['В наличии'] || item['Количество'] || item['quantity'] || 0;
             const buyingPrice = item['Цена закупки'] || item['BuyingPrice'] || item['Закупка'] || 0;
             const sellingPrice = item['Цена продажи'] || item['SellingPrice'] || item['Продажа'] || buyingPrice;
@@ -83,7 +85,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             if (name) {
                 await Product.findOneAndUpdate(
                     { name: name },
-                    { name, quantity, buyingPrice, sellingPrice, category },
+                    { name, article, quantity, buyingPrice, sellingPrice, category },
                     { upsert: true, new: true }
                 );
                 updatedCount++;
@@ -97,12 +99,15 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// 🚀 ВИПРАВЛЕНИЙ МАРШРУТ ПРОДАЖІВ
+// 🔥 СУПЕР-ТОЧНЕ ЗАВАНТАЖЕННЯ (Читає вкладку "По позициям")
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
-        const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+        
+        // Шукаємо лист "По позициям" або "Items"
+        let sheetName = workbook.SheetNames.find(n => n.includes('позици') || n.includes('Items')) || workbook.SheetNames[0];
+        const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
         await Sale.deleteMany({}); 
 
@@ -110,30 +115,45 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
         let profitAdded = 0;
 
         for (const item of data) {
-            const rawStatus = item['Статус заказа'];
-            // 👇 Робимо статус "чистим" (прибираємо пробіли) і перевіряємо чи він МІСТИТЬ слово "Доставлен"
-            // Це зловить і "Доставлен", і "Доставлено", і " доставлено "
-            const status = rawStatus ? rawStatus.toString().trim() : '';
+            // 1. Статус
+            const rawStatus = item['Статус'] || item['Статус заказа'] || '';
+            const status = rawStatus.toString().trim();
             
-            const name = item['Товар'];
-            const quantity = item['Кол-во этого товара'] || 0;
-            const soldPrice = item['Цена (за 1)'] || 0; 
-            
-            // Шукаємо частинку слова 'Доставлен'
-            if (status.includes('Доставлен') && name && quantity > 0) {
-                
-                const product = await Product.findOne({ name: name });
-                const buyingPrice = product ? product.buyingPrice : 0;
-                
-                const profit = (soldPrice - buyingPrice) * quantity;
+            // 2. Дані товару
+            const name = item['Товар'] || item['Название товара'];
+            const quantity = item['Кол-во'] || item['Количество'] || 1;
+            const soldPrice = item['Цена продажи (за 1)'] || item['Цена продажи'] || 0; 
 
+            // 3. ФІНАНСИ (Беремо готові цифри з файлу!)
+            // У твоєму файлі це колонки "Себестоимость позиции" та "Прибыль позиции"
+            let buyingPrice = item['Себестоимость позиции'] || item['Себестоимость'] || 0;
+            let profit = item['Прибыль позиции'] || item['Прибыль'];
+
+            // Запасний варіант: якщо у файлі немає цифр, шукаємо в базі
+            if (!buyingPrice && !profit) {
+                const article = item['Артикул'];
+                let product = null;
+                if (article) product = await Product.findOne({ article: article });
+                if (!product && name) product = await Product.findOne({ name: name });
+                if (product) buyingPrice = product.buyingPrice;
+            }
+
+            // Якщо прибуток ще не знайдено, рахуємо
+            if (!profit) {
+                profit = (soldPrice - buyingPrice) * quantity;
+            }
+
+            // 4. Фільтр: Беремо тільки доставлені
+            const isDelivered = status.toLowerCase().includes('доставлен') || status.toLowerCase().includes('выполнен');
+
+            if (isDelivered && name) {
                 await Sale.create({
-                    orderStatus: status, // Записуємо як є в файлі
+                    orderStatus: status,
                     productName: name,
                     quantity: quantity,
                     soldPrice: soldPrice,
                     buyingPriceAtSale: buyingPrice,
-                    profit: profit,
+                    profit: profit, 
                     date: new Date()
                 });
 
@@ -143,10 +163,10 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
         }
 
         fs.unlinkSync(req.file.path);
-        res.json({ message: `Враховано ${salesCount} замовлень. Прибуток: ${profitAdded.toFixed(2)} ₴` });
+        res.json({ message: `Оброблено ${salesCount} позицій. Прибуток: ${profitAdded.toFixed(2)} ₴` });
     } catch (error) {
         console.error(error);
-        res.status(500).json({ message: 'Помилка обробки продажів' });
+        res.status(500).json({ message: 'Помилка обробки звіту' });
     }
 });
 
