@@ -24,7 +24,7 @@ const ProductSchema = new mongoose.Schema({
     buyingPrice: { type: Number, default: 0 },
     sellingPrice: { type: Number, default: 0 },
     category: { type: String, default: 'Склад' },
-    owner: { type: String, default: 'Спільне' } // 👈 Нове поле: Власник (Я, Батько, Спільне)
+    owner: { type: String, default: 'Спільне' } // 👈 Нове поле: Власник
 });
 const Product = mongoose.model('Product', ProductSchema);
 
@@ -67,15 +67,12 @@ app.get('/sales-stats', async (req, res) => {
             totalSalesCount += sale.quantity;
 
             // 💰 ГОЛОВНА ЛОГІКА РОЗПОДІЛУ
-            // Якщо власник "Я" або "Богдан" (можеш підлаштувати під свої назви в Excel)
             if (sale.owner && (sale.owner.toLowerCase().includes('я') || sale.owner.toLowerCase().includes('богдан'))) {
                 myShare += profit; 
             } 
-            // Якщо власник "Батько", "Отец", "Папа"
             else if (sale.owner && (sale.owner.toLowerCase().includes('отец') || sale.owner.toLowerCase().includes('папа') || sale.owner.toLowerCase().includes('батько'))) {
                 fatherShare += profit;
             } 
-            // Якщо "Спільне" або пусте — ділимо 50/50
             else {
                 myShare += profit / 2;
                 fatherShare += profit / 2;
@@ -86,8 +83,8 @@ app.get('/sales-stats', async (req, res) => {
             profit: totalProfit, 
             revenue: totalRevenue, 
             count: totalSalesCount,
-            myShare: myShare,      // 👈 Твій чистий навар
-            fatherShare: fatherShare // 👈 Навар батька
+            myShare: myShare,      
+            fatherShare: fatherShare 
         });
     } catch (error) {
         console.error(error);
@@ -104,12 +101,20 @@ app.get('/sales-history', async (req, res) => {
     }
 });
 
-// 🔥 ОНОВЛЕНЕ ЗАВАНТАЖЕННЯ СКЛАДУ (Читає "Доля")
+// 🔥 ОНОВЛЕНЕ ЗАВАНТАЖЕННЯ СКЛАДУ (З ДІАГНОСТИКОЮ)
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+
+        console.log('🔍 ПОЧИНАЮ АНАЛІЗ ФАЙЛУ СКЛАДУ...');
+        
+        // 1. ПОКАЗУЄМО ПЕРШИЙ РЯДОК (Щоб побачити назви колонок)
+        if (data.length > 0) {
+            console.log('📋 ПРИКЛАД ДАНИХ (Перший товар):');
+            console.log(JSON.stringify(data[0], null, 2));
+        }
 
         let updatedCount = 0;
         for (const item of data) {
@@ -120,8 +125,16 @@ app.post('/upload', upload.single('file'), async (req, res) => {
             const sellingPrice = item['Цена продажи'] || item['SellingPrice'] || item['Продажа'] || buyingPrice;
             const category = item['Категория'] || item['Category'] || 'Склад';
             
-            // 👇 Читаємо нову колонку "Доля" (або Owner)
-            const owner = item['Доля'] || item['Share'] || item['Владелец'] || 'Спільне';
+            // 👇 ТУТ МИ ШУКАЄМО ВЛАСНИКА (Перевіряємо всі варіанти)
+            const owner = item['Доля'] || item['доля'] || item['Share'] || item['share'] || item['Владелец'] || 'Спільне';
+
+            // 2. ДІАГНОСТИКА КОНКРЕТНОГО ТОВАРУ
+            if (name && name.toLowerCase().includes('toolkitrc m6d')) {
+                console.log(`🧐 ЗНАЙШОВ TOOLKITRC!`);
+                console.log(`-- Значення "Доля": "${item['Доля']}"`);
+                console.log(`-- Значення "Share": "${item['Share']}"`);
+                console.log(`-- Що піде в базу (змінна owner): "${owner}"`);
+            }
 
             if (name) {
                 await Product.findOneAndUpdate(
@@ -140,7 +153,7 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// 🔥 ЗАВАНТАЖЕННЯ ПРОДАЖІВ (Авто-підтягування власника)
+// 🔥 ЗАВАНТАЖЕННЯ ПРОДАЖІВ
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
@@ -163,9 +176,8 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
             
             let buyingPrice = item['Себестоимость позиции'] || item['Себестоимость'] || 0;
             let profit = item['Прибыль позиции'] || item['Прибыль'];
-            let owner = 'Спільне'; // За замовчуванням
+            let owner = 'Спільне';
 
-            // 🔍 Завжди шукаємо товар у базі, щоб знати власника!
             const article = item['Артикул'];
             let product = null;
             
@@ -173,9 +185,8 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
             if (!product && name) product = await Product.findOne({ name: name });
 
             if (product) {
-                // Якщо знайшли товар, беремо його закупку (якщо нема в файлі) і ВЛАСНИКА
                 if (!buyingPrice) buyingPrice = product.buyingPrice;
-                if (product.owner) owner = product.owner; // 👈 Ось тут магія: беремо "Я" або "Отец" з бази
+                if (product.owner) owner = product.owner; 
             }
 
             if (!profit) profit = (soldPrice - buyingPrice) * quantity;
@@ -190,7 +201,7 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
                     soldPrice: soldPrice,
                     buyingPriceAtSale: buyingPrice,
                     profit: profit, 
-                    owner: owner, // Записуємо, хто заробив на цьому
+                    owner: owner, 
                     date: new Date()
                 });
 
