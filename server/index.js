@@ -16,15 +16,15 @@ mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log('🔥 Успіх! База MongoDB підключена.'))
     .catch(err => console.error('Помилка підключення:', err));
 
-// --- МОДЕЛИ ---
+// --- МОДЕЛІ ---
 const ProductSchema = new mongoose.Schema({
-    name: { type: String, required: true }, // Название
-    article: { type: String, default: '' }, // Артикул
-    quantity: { type: Number, default: 0 }, // В наличии
-    buyingPrice: { type: Number, default: 0 }, // Цена закупки
-    sellingPrice: { type: Number, default: 0 }, // Цена продажи
-    category: { type: String, default: 'Склад' }, // Категория
-    owner: { type: String, default: 'Shared' } // Доля (Me, Father, Shared)
+    name: { type: String, required: true },
+    article: { type: String, default: '' },
+    quantity: { type: Number, default: 0 },
+    buyingPrice: { type: Number, default: 0 },
+    sellingPrice: { type: Number, default: 0 },
+    category: { type: String, default: 'Склад' },
+    owner: { type: String, default: 'Спільне' } // "Я", "Отець", "Спільне"
 });
 const Product = mongoose.model('Product', ProductSchema);
 
@@ -36,214 +36,135 @@ const SaleSchema = new mongoose.Schema({
     soldPrice: Number,
     buyingPriceAtSale: Number,
     profit: Number,
-    owner: { type: String, default: 'Shared' }
+    owner: { type: String, default: 'Спільне' }
 });
 const Sale = mongoose.model('Sale', SaleSchema);
 
-// --- 🛠 ЖЕСТКАЯ ОЧИСТКА ЧИСЕЛ ---
-// Удаляет пробелы (в т.ч. неразрывные), значки валют, меняет запятую на точку
-const cleanNumber = (value) => {
-    if (!value) return 0;
-    // \s включает в себя пробелы, табы и неразрывные пробелы
-    let str = String(value).replace(/\s/g, '').replace(/[^0-9.,-]/g, ''); 
-    str = str.replace(',', '.');
-    const num = parseFloat(str);
-    return isNaN(num) ? 0 : num;
+// --- 🛠 РОЗУМНІ ХЕЛПЕРИ ---
+
+// 1. Очистка чисел (видаляє пробіли, ₴, $, коми міняє на крапки)
+const parseNum = (val) => {
+    if (val === undefined || val === null || val === '') return 0;
+    const clean = String(val).replace(/\s/g, '').replace(/[^0-9.,-]/g, '').replace(',', '.');
+    const n = parseFloat(clean);
+    return isNaN(n) ? 0 : n;
 };
 
-// --- ОПРЕДЕЛЕНИЕ ВЛАДЕЛЬЦА ---
-const determineOwner = (value) => {
-    if (!value) return 'Shared';
-    const v = String(value).toLowerCase().trim();
-    if (v.includes('я') || v.includes('богдан') || v.includes('my')) return 'Me';
-    if (v.includes('отец') || v.includes('папа') || v.includes('батько')) return 'Father';
-    return 'Shared';
+// 2. Пошук ключа в об'єкті (ігнорує регістр і пробіли)
+const getVal = (obj, search) => {
+    const key = Object.keys(obj).find(k => k.toLowerCase().trim().includes(search.toLowerCase()));
+    return key ? obj[key] : null;
 };
 
-// --- МАРШРУТЫ ---
+// 3. Визначення власника (під твій React код)
+const getOwner = (val) => {
+    if (!val) return 'Спільне';
+    const v = String(val).toLowerCase().trim();
+    if (v.includes('я') || v.includes('богдан')) return 'Я';
+    if (v.includes('отец') || v.includes('папа') || v.includes('батько')) return 'Отець';
+    return 'Спільне';
+};
+
+// --- МАРШРУТИ ---
 
 app.get('/products', async (req, res) => {
     const products = await Product.find();
     res.json(products);
 });
 
-// СТАТИСТИКА
 app.get('/sales-stats', async (req, res) => {
     try {
         const sales = await Sale.find();
-        
-        let totalProfit = 0;
-        let totalRevenue = 0;
-        let totalSalesCount = 0;
-        let myShare = 0;
-        let fatherShare = 0;
+        let stats = { profit: 0, revenue: 0, count: 0, myShare: 0, fatherShare: 0 };
 
         sales.forEach(sale => {
-            const profit = sale.profit || 0;
-            totalProfit += profit;
-            totalRevenue += (sale.soldPrice * sale.quantity);
-            totalSalesCount += sale.quantity;
+            const p = sale.profit || 0;
+            stats.profit += p;
+            stats.revenue += (sale.soldPrice * sale.quantity);
+            stats.count += sale.quantity;
 
-            if (sale.owner === 'Me') {
-                myShare += profit;
-            } else if (sale.owner === 'Father') {
-                fatherShare += profit;
-            } else {
-                myShare += profit / 2;
-                fatherShare += profit / 2;
-            }
+            if (sale.owner === 'Я') stats.myShare += p;
+            else if (sale.owner === 'Отець') stats.fatherShare += p;
+            else { stats.myShare += p / 2; stats.fatherShare += p / 2; }
         });
-
-        res.json({ 
-            profit: totalProfit, 
-            revenue: totalRevenue, 
-            count: totalSalesCount,
-            myShare: myShare,      
-            fatherShare: fatherShare 
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Помилка статистики' });
-    }
+        res.json(stats);
+    } catch (e) { res.status(500).send(e); }
 });
 
 app.get('/sales-history', async (req, res) => {
-    try {
-        const sales = await Sale.find().sort({ date: -1 });
-        res.json(sales);
-    } catch (error) {
-        res.status(500).json({ message: 'Помилка отримання історії' });
-    }
+    const sales = await Sale.find().sort({ date: -1 });
+    res.json(sales);
 });
 
-// 🔥 ЗАГРУЗКА СКЛАДА (По твоему файлу "СКЛАД ВСЯ ИНФА.xlsx")
+// 🔥 ЗАВАНТАЖЕННЯ СКЛАДУ
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-
-        console.log('🔄 Обновляю склад...');
-        let updatedCount = 0;
-
+        
         for (const item of data) {
-            // Берем ТОЧНЫЕ названия колонок из твоего файла
-            const name = item['Название'];
-            
+            const name = getVal(item, 'Название') || getVal(item, 'Товар');
             if (name) {
-                // Чистим числа от пробелов "1 200" -> 1200
-                const buyingPrice = cleanNumber(item['Цена закупки']);
-                const sellingPrice = cleanNumber(item['Цена продажи']);
-                const quantity = cleanNumber(item['В наличии']);
-                
-                const article = item['Артикул'] ? String(item['Артикул']) : '';
-                const category = item['Категория'] || 'Склад';
-                
-                // Читаем колонку "Доля"
-                const ownerRaw = item['Доля'];
-                const owner = determineOwner(ownerRaw);
-
                 await Product.findOneAndUpdate(
-                    { name: name },
-                    { name, article, quantity, buyingPrice, sellingPrice, category, owner },
-                    { upsert: true, new: true }
+                    { name: name.trim() },
+                    {
+                        name: name.trim(),
+                        article: String(getVal(item, 'Артикул') || ''),
+                        quantity: parseNum(getVal(item, 'наличии')),
+                        buyingPrice: parseNum(getVal(item, 'закупки')),
+                        sellingPrice: parseNum(getVal(item, 'продажи')),
+                        owner: getOwner(getVal(item, 'Доля'))
+                    },
+                    { upsert: true }
                 );
-                updatedCount++;
             }
         }
         fs.unlinkSync(req.file.path);
-        console.log(`✅ Склад обновлен: ${updatedCount} товаров.`);
-        res.json({ message: `Оновлено ${updatedCount} товарів. Ціни виправлені.` });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Помилка обробки файлу' });
-    }
+        res.json({ message: "Склад оновлено!" });
+    } catch (e) { res.status(500).send(e); }
 });
 
-// 🔥 ЗАГРУЗКА ЗАКАЗОВ (По твоему файлу "апдейт заказов...xlsx" лист "По позициям")
+// 🔥 ЗАВАНТАЖЕННЯ ПРОДАЖІВ
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
-        if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
-        
-        // Ищем лист, где есть слово "позици" (обычно "По позициям")
-        let sheetName = workbook.SheetNames.find(n => n.toLowerCase().includes('позици'));
-        if (!sheetName) sheetName = workbook.SheetNames[0]; // Если не нашли, берем первый
-        
+        let sheetName = workbook.SheetNames.find(n => n.includes('позици')) || workbook.SheetNames[0];
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
 
-        console.log(`🔄 Обрабатываю отчет: лист "${sheetName}"`);
-        await Sale.deleteMany({}); 
-
-        let salesCount = 0;
-        let profitAdded = 0;
+        await Sale.deleteMany({});
+        let added = 0;
 
         for (const item of data) {
-            // Точные названия колонок из твоего файла
-            const name = item['Товар'];
-            const rawStatus = item['Статус заказа'];
-
-            if (name && rawStatus) {
-                const status = String(rawStatus).trim();
+            const name = getVal(item, 'Товар');
+            const status = String(getVal(item, 'Статус') || '').toLowerCase();
+            
+            if (name && (status.includes('доставлен') || status.includes('выполнен'))) {
+                const qty = parseNum(getVal(item, 'Кол-во'));
+                const sell = parseNum(getVal(item, 'Цена продажи'));
+                let buy = parseNum(getVal(item, 'Себестоимость'));
                 
-                // Проверяем статус: Доставлен или Выполнен
-                const isDelivered = status.toLowerCase().includes('доставлен') || status.toLowerCase().includes('выполнен');
+                let product = await Product.findOne({ name: name.trim() });
+                if (buy === 0 && product) buy = product.buyingPrice;
+                
+                let profit = parseNum(getVal(item, 'Прибыль'));
+                if (profit === 0) profit = (sell - buy) * qty;
 
-                if (isDelivered) {
-                    const quantity = cleanNumber(item['Кол-во']);
-                    const soldPrice = cleanNumber(item['Цена продажи']);
-                    const fileBuyingPrice = cleanNumber(item['Себестоимость']); 
-                    let profit = cleanNumber(item['Прибыль']);
-
-                    // Ищем товар в базе, чтобы узнать ВЛАДЕЛЬЦА (Owner)
-                    let product = await Product.findOne({ name: name });
-                    
-                    // Если прибыль не посчитана в файле, считаем сами
-                    let finalBuyingPrice = fileBuyingPrice;
-                    if (finalBuyingPrice === 0 && product) {
-                        finalBuyingPrice = product.buyingPrice;
-                    }
-
-                    if (profit === 0) {
-                        profit = (soldPrice - finalBuyingPrice) * quantity;
-                    }
-
-                    // Определяем чьи деньги
-                    let owner = 'Shared';
-                    if (product && product.owner) {
-                        owner = product.owner;
-                    }
-
-                    await Sale.create({
-                        orderStatus: status,
-                        productName: name,
-                        quantity: quantity,
-                        soldPrice: soldPrice,
-                        buyingPriceAtSale: finalBuyingPrice,
-                        profit: profit, 
-                        owner: owner, 
-                        date: new Date()
-                    });
-
-                    salesCount++;
-                    profitAdded += profit;
-                }
+                await Sale.create({
+                    productName: name.trim(),
+                    orderStatus: status,
+                    quantity: qty,
+                    soldPrice: sell,
+                    buyingPriceAtSale: buy,
+                    profit: profit,
+                    owner: product ? product.owner : 'Спільне'
+                });
+                added++;
             }
         }
-
         fs.unlinkSync(req.file.path);
-        console.log(`✅ Обработано ${salesCount} продаж. Прибыль: ${profitAdded}`);
-        res.json({ message: `Оброблено ${salesCount} позицій. Прибуток: ${profitAdded.toLocaleString()} ₴` });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Помилка обробки звіту' });
-    }
-});
-
-app.delete('/products', async (req, res) => {
-    await Product.deleteMany({});
-    res.json({ message: 'Склад очищено' });
+        res.json({ message: `Оброблено ${added} продажів` });
+    } catch (e) { res.status(500).send(e); }
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Сервер готовий на порту ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Сервер на порту ${PORT}`));
