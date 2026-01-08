@@ -24,7 +24,7 @@ const ProductSchema = new mongoose.Schema({
     buyingPrice: { type: Number, default: 0 },
     sellingPrice: { type: Number, default: 0 },
     category: { type: String, default: 'Склад' },
-    owner: { type: String, default: 'Спільне' } // "Я", "Отець", "Спільне"
+    owner: { type: String, default: 'Спільне' } 
 });
 const Product = mongoose.model('Product', ProductSchema);
 
@@ -42,7 +42,6 @@ const Sale = mongoose.model('Sale', SaleSchema);
 
 // --- 🛠 РОЗУМНІ ХЕЛПЕРИ ---
 
-// 1. Очистка чисел (видаляє пробіли, ₴, $, коми міняє на крапки)
 const parseNum = (val) => {
     if (val === undefined || val === null || val === '') return 0;
     const clean = String(val).replace(/\s/g, '').replace(/[^0-9.,-]/g, '').replace(',', '.');
@@ -50,13 +49,11 @@ const parseNum = (val) => {
     return isNaN(n) ? 0 : n;
 };
 
-// 2. Пошук ключа в об'єкті (ігнорує регістр і пробіли)
 const getVal = (obj, search) => {
     const key = Object.keys(obj).find(k => k.toLowerCase().trim().includes(search.toLowerCase()));
     return key ? obj[key] : null;
 };
 
-// 3. Визначення власника (під твій React код)
 const getOwner = (val) => {
     if (!val) return 'Спільне';
     const v = String(val).toLowerCase().trim();
@@ -96,32 +93,43 @@ app.get('/sales-history', async (req, res) => {
     res.json(sales);
 });
 
-// 🔥 ЗАВАНТАЖЕННЯ СКЛАДУ
+// 🔥 ОНОВЛЕНЕ ЗАВАНТАЖЕННЯ СКЛАДУ (Фікс для точної суми)
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
         
+        // 1. Очищаємо склад перед завантаженням, щоб не було перезаписів дублікатів
+        await Product.deleteMany({});
+        
+        const productsToInsert = [];
+
         for (const item of data) {
             const name = getVal(item, 'Название') || getVal(item, 'Товар');
             if (name) {
-                await Product.findOneAndUpdate(
-                    { name: name.trim() },
-                    {
-                        name: name.trim(),
-                        article: String(getVal(item, 'Артикул') || ''),
-                        quantity: parseNum(getVal(item, 'наличии')),
-                        buyingPrice: parseNum(getVal(item, 'закупки')),
-                        sellingPrice: parseNum(getVal(item, 'продажи')),
-                        owner: getOwner(getVal(item, 'Доля'))
-                    },
-                    { upsert: true }
-                );
+                productsToInsert.push({
+                    name: name.trim(),
+                    article: String(getVal(item, 'Артикул') || ''),
+                    quantity: parseNum(getVal(item, 'наличии')),
+                    buyingPrice: parseNum(getVal(item, 'закупки')),
+                    sellingPrice: parseNum(getVal(item, 'продажи')),
+                    category: String(getVal(item, 'Категория') || 'Склад'),
+                    owner: getOwner(getVal(item, 'Доля'))
+                });
             }
         }
+
+        // 2. Вставляємо всі стрічки з файлу
+        if (productsToInsert.length > 0) {
+            await Product.insertMany(productsToInsert);
+        }
+
         fs.unlinkSync(req.file.path);
-        res.json({ message: "Склад оновлено!" });
-    } catch (e) { res.status(500).send(e); }
+        res.json({ message: "Склад оновлено! Сума синхронізована." });
+    } catch (e) { 
+        console.error(e);
+        res.status(500).send(e); 
+    }
 });
 
 // 🔥 ЗАВАНТАЖЕННЯ ПРОДАЖІВ
@@ -143,6 +151,7 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
                 const sell = parseNum(getVal(item, 'Цена продажи'));
                 let buy = parseNum(getVal(item, 'Себестоимость'));
                 
+                // Шукаємо товар, щоб підтягнути власника
                 let product = await Product.findOne({ name: name.trim() });
                 if (buy === 0 && product) buy = product.buyingPrice;
                 
