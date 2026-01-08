@@ -5,8 +5,8 @@ const cors = require('cors');
 const multer = require('multer');
 const xlsx = require('xlsx');
 const fs = require('fs');
-const nodemailer = require('nodemailer'); 
-const cron = require('node-cron');        
+const nodemailer = require('nodemailer');
+const cron = require('node-cron');
 
 const app = express();
 app.use(cors());
@@ -40,11 +40,11 @@ const SaleSchema = new mongoose.Schema({
 });
 const Sale = mongoose.model('Sale', SaleSchema);
 
-// --- 📧 ВИПРАВЛЕНІ НАЛАШТУВАННЯ ПОШТИ (SSL/465) ---
+// --- 📧 НАЛАШТУВАННЯ ПОШТИ (ПОРТ 587 - НАЙНАДІЙНІШИЙ) ---
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com', // Явно вказуємо сервер Google
-    port: 465,              // Використовуємо захищений порт
-    secure: true,           // Вмикаємо шифрування
+    host: 'smtp.gmail.com',
+    port: 587,              // Використовуємо порт 587
+    secure: false,          // secure: false (для 587 це правильно)
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -110,7 +110,7 @@ const sendMonthlyReport = async () => {
         fs.unlinkSync(fileName); 
     } catch (error) {
         console.error('❌ Помилка відправки:', error);
-        throw error; // Викидаємо помилку, щоб її було видно на сайті
+        throw error;
     }
 };
 
@@ -193,7 +193,6 @@ app.post('/upload', upload.single('file'), async (req, res) => {
     }
 });
 
-// 🔥 СУПЕР-ТОЧНЕ ЗАВАНТАЖЕННЯ (Читає вкладку "По позициям")
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
