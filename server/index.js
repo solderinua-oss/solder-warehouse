@@ -40,11 +40,9 @@ const SaleSchema = new mongoose.Schema({
 });
 const Sale = mongoose.model('Sale', SaleSchema);
 
-// --- 📧 НАЛАШТУВАННЯ ПОШТИ (ПОРТ 587 - НАЙНАДІЙНІШИЙ) ---
+// --- 📧 ПОВЕРТАЄМОСЯ ДО 'service: gmail' (ВОНО МАЄ ЗАПРАЦЮВАТИ) ---
 const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,              // Використовуємо порт 587
-    secure: false,          // secure: false (для 587 це правильно)
+    service: 'gmail', // 👈 Розумне авто-налаштування
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS
@@ -197,25 +195,19 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
         const workbook = xlsx.readFile(req.file.path);
-        
         let sheetName = workbook.SheetNames.find(n => n.includes('позици') || n.includes('Items')) || workbook.SheetNames[0];
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
-
         await Sale.deleteMany({}); 
-
         let salesCount = 0;
         let profitAdded = 0;
-
         for (const item of data) {
             const rawStatus = item['Статус'] || item['Статус заказа'] || '';
             const status = rawStatus.toString().trim();
             const name = item['Товар'] || item['Название товара'];
             const quantity = item['Кол-во'] || item['Количество'] || 1;
             const soldPrice = item['Цена продажи (за 1)'] || item['Цена продажи'] || 0; 
-            
             let buyingPrice = item['Себестоимость позиции'] || item['Себестоимость'] || 0;
             let profit = item['Прибыль позиции'] || item['Прибыль'];
-
             if (!buyingPrice && !profit) {
                 const article = item['Артикул'];
                 let product = null;
@@ -223,11 +215,8 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
                 if (!product && name) product = await Product.findOne({ name: name });
                 if (product) buyingPrice = product.buyingPrice;
             }
-
             if (!profit) profit = (soldPrice - buyingPrice) * quantity;
-
             const isDelivered = status.toLowerCase().includes('доставлен') || status.toLowerCase().includes('выполнен');
-
             if (isDelivered && name) {
                 await Sale.create({
                     orderStatus: status,
@@ -238,12 +227,10 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
                     profit: profit, 
                     date: new Date()
                 });
-
                 salesCount++;
                 profitAdded += profit;
             }
         }
-
         fs.unlinkSync(req.file.path);
         res.json({ message: `Оброблено ${salesCount} позицій. Прибуток: ${profitAdded.toFixed(2)} ₴` });
     } catch (error) {
