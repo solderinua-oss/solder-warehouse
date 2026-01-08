@@ -16,14 +16,26 @@ mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log('🔥 Успіх! База MongoDB підключена.'))
     .catch(err => console.error('Помилка підключення:', err));
 
+// --- МОДЕЛІ ---
 const ProductSchema = new mongoose.Schema({
     name: { type: String, required: true },
     quantity: { type: Number, default: 0 },
     buyingPrice: { type: Number, default: 0 },
     sellingPrice: { type: Number, default: 0 },
-    category: { type: String, default: 'Товар' }
+    category: { type: String, default: 'Склад' }
 });
 const Product = mongoose.model('Product', ProductSchema);
+
+// Модель для ПРОДАЖІВ
+const SaleSchema = new mongoose.Schema({
+    date: { type: Date, default: Date.now },
+    productName: String,
+    quantity: Number,
+    soldPrice: Number,
+    buyingPriceAtSale: Number,
+    profit: Number
+});
+const Sale = mongoose.model('Sale', SaleSchema);
 
 // --- МАРШРУТИ ---
 
@@ -32,56 +44,106 @@ app.get('/products', async (req, res) => {
     res.json(products);
 });
 
+// Статистика ПРОДАЖІВ
+app.get('/sales-stats', async (req, res) => {
+    try {
+        const sales = await Sale.find();
+        const totalProfit = sales.reduce((acc, sale) => acc + (sale.profit || 0), 0);
+        const totalRevenue = sales.reduce((acc, sale) => acc + (sale.soldPrice * sale.quantity), 0);
+        const totalSalesCount = sales.reduce((acc, sale) => acc + sale.quantity, 0);
+
+        res.json({
+            profit: totalProfit,
+            revenue: totalRevenue,
+            count: totalSalesCount
+        });
+    } catch (error) {
+        res.status(500).json({ message: 'Помилка статистики' });
+    }
+});
+
+// Завантаження СКЛАДУ (Товари)
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
-
         const workbook = xlsx.readFile(req.file.path);
-        const sheetName = workbook.SheetNames[0];
-        const data = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+        const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
 
         let updatedCount = 0;
         for (const item of data) {
-            // --- ОСЬ ТУТ ОНОВЛЕНА МАГІЯ ДЛЯ НОВОГО ФАЙЛУ ---
-            
-            // 1. Назва (шукаємо різні варіанти)
             const name = item['Название'] || item['Название(RU)'] || item['name'] || item['Name'];
-            
-            // 2. Кількість (шукаємо "В наличии" або "Количество")
-            const quantity = item['В наличии'] || item['Количество'] || item['quantity'] || item['Quantity'] || 0;
-            
-            // 3. Ціна закупки (шукаємо "Цена закупки")
-            // Якщо немає, спробуємо знайти просто "Закупка"
+            const quantity = item['В наличии'] || item['Количество'] || item['quantity'] || 0;
             const buyingPrice = item['Цена закупки'] || item['BuyingPrice'] || item['Закупка'] || 0;
-            
-            // 4. Ціна продажу (шукаємо "Цена продажи")
-            // Якщо її немає, беремо ціну закупки, щоб не було нуля
             const sellingPrice = item['Цена продажи'] || item['SellingPrice'] || item['Продажа'] || buyingPrice;
-
-            // 5. Категорія
             const category = item['Категория'] || item['Category'] || 'Склад';
 
             if (name) {
                 await Product.findOneAndUpdate(
                     { name: name },
-                    {
-                        name: name,
-                        quantity: quantity,
-                        buyingPrice: buyingPrice, // Тепер це реальна собівартість
-                        sellingPrice: sellingPrice, // А це реальна ціна для клієнта
-                        category: category
-                    },
+                    { name, quantity, buyingPrice, sellingPrice, category },
                     { upsert: true, new: true }
                 );
                 updatedCount++;
             }
         }
-
         fs.unlinkSync(req.file.path);
-        res.json({ message: `Успішно завантажено ${updatedCount} товарів! Ціни оновлено.` });
+        res.json({ message: `Оновлено ${updatedCount} товарів на складі!` });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Помилка обробки файлу' });
+    }
+});
+
+// 🚀 Завантаження ПРОДАЖІВ (Твій новий файл)
+app.post('/upload-sales', upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ message: 'Файл не знайдено' });
+        const workbook = xlsx.readFile(req.file.path);
+        const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+
+        // Очищаємо історію перед новим завантаженням (щоб не дублювати)
+        await Sale.deleteMany({}); 
+
+        let salesCount = 0;
+        let profitAdded = 0;
+
+        for (const item of data) {
+            // 👇 Читаємо твій новий файл (як на скріншоті)
+            const name = item['Товар'];
+            const quantity = item['Кол-во этого товара'] || 0;
+            const soldPrice = item['Цена (за 1)'] || 0; 
+            
+            // Якщо товару немає назви або к-сті - пропускаємо
+            if (name && quantity > 0) {
+                // 1. Шукаємо товар на складі (щоб дізнатися за скільки ТИ його купив)
+                const product = await Product.findOne({ name: name });
+                
+                // Якщо знайшли - беремо ціну закупки. Якщо ні - вважаємо закупку 0 (весь продаж = прибуток)
+                const buyingPrice = product ? product.buyingPrice : 0;
+                
+                // 2. Рахуємо чистий навар
+                const profit = (soldPrice - buyingPrice) * quantity;
+
+                // 3. Записуємо продаж
+                await Sale.create({
+                    productName: name,
+                    quantity: quantity,
+                    soldPrice: soldPrice,
+                    buyingPriceAtSale: buyingPrice,
+                    profit: profit,
+                    date: new Date()
+                });
+
+                salesCount++;
+                profitAdded += profit;
+            }
+        }
+
+        fs.unlinkSync(req.file.path);
+        res.json({ message: `Оброблено ${salesCount} продажів. Чистий прибуток: ${profitAdded.toFixed(2)} ₴` });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Помилка обробки продажів' });
     }
 });
 
@@ -91,4 +153,4 @@ app.delete('/products', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`🚀 Сервер чекає твій файл на порту ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Сервер готовий на порту ${PORT}`));
