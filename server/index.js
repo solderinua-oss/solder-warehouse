@@ -29,6 +29,7 @@ const ProductSchema = new mongoose.Schema({
 const Product = mongoose.model('Product', ProductSchema);
 
 const SaleSchema = new mongoose.Schema({
+    orderId: String, // 👈 Добавили ID заказа для группировки
     date: { type: Date, default: Date.now },
     orderStatus: String,
     productName: String,
@@ -40,8 +41,7 @@ const SaleSchema = new mongoose.Schema({
 });
 const Sale = mongoose.model('Sale', SaleSchema);
 
-// --- 🛠 РОЗУМНІ ХЕЛПЕРИ ---
-
+// --- 🛠 ХЕЛПЕРИ ---
 const parseNum = (val) => {
     if (val === undefined || val === null || val === '') return 0;
     const clean = String(val).replace(/\s/g, '').replace(/[^0-9.,-]/g, '').replace(',', '.');
@@ -69,21 +69,33 @@ app.get('/products', async (req, res) => {
     res.json(products);
 });
 
+// 🔥 ОБНОВЛЕННАЯ СТАТИСТИКА (Считает уникальные заказы)
 app.get('/sales-stats', async (req, res) => {
     try {
         const sales = await Sale.find();
         let stats = { profit: 0, revenue: 0, count: 0, myShare: 0, fatherShare: 0 };
+        
+        // Сет для хранения уникальных номеров заказов
+        const uniqueOrderIds = new Set();
 
         sales.forEach(sale => {
             const p = sale.profit || 0;
             stats.profit += p;
             stats.revenue += (sale.soldPrice * sale.quantity);
-            stats.count += sale.quantity;
+            
+            // Если у заказа есть ID, добавляем его в Сет
+            if (sale.orderId) {
+                uniqueOrderIds.add(sale.orderId);
+            }
 
             if (sale.owner === 'Я') stats.myShare += p;
             else if (sale.owner === 'Отець') stats.fatherShare += p;
             else { stats.myShare += p / 2; stats.fatherShare += p / 2; }
         });
+
+        // 👈 Количество заказов = размер Сета (если пустой, считаем по записям)
+        stats.count = uniqueOrderIds.size || sales.length;
+
         res.json(stats);
     } catch (e) { res.status(500).send(e); }
 });
@@ -93,17 +105,12 @@ app.get('/sales-history', async (req, res) => {
     res.json(sales);
 });
 
-// 🔥 ОНОВЛЕНЕ ЗАВАНТАЖЕННЯ СКЛАДУ (Фікс для точної суми)
 app.post('/upload', upload.single('file'), async (req, res) => {
     try {
         const workbook = xlsx.readFile(req.file.path);
         const data = xlsx.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
-        
-        // 1. Очищаємо склад перед завантаженням, щоб не було перезаписів дублікатів
         await Product.deleteMany({});
-        
         const productsToInsert = [];
-
         for (const item of data) {
             const name = getVal(item, 'Название') || getVal(item, 'Товар');
             if (name) {
@@ -118,21 +125,13 @@ app.post('/upload', upload.single('file'), async (req, res) => {
                 });
             }
         }
-
-        // 2. Вставляємо всі стрічки з файлу
-        if (productsToInsert.length > 0) {
-            await Product.insertMany(productsToInsert);
-        }
-
+        if (productsToInsert.length > 0) await Product.insertMany(productsToInsert);
         fs.unlinkSync(req.file.path);
-        res.json({ message: "Склад оновлено! Сума синхронізована." });
-    } catch (e) { 
-        console.error(e);
-        res.status(500).send(e); 
-    }
+        res.json({ message: "Склад оновлено!" });
+    } catch (e) { res.status(500).send(e); }
 });
 
-// 🔥 ЗАВАНТАЖЕННЯ ПРОДАЖІВ
+// 🔥 ОБНОВЛЕННАЯ ЗАГРУЗКА ПРОДАЖ (Запоминает номер заказа)
 app.post('/upload-sales', upload.single('file'), async (req, res) => {
     try {
         const workbook = xlsx.readFile(req.file.path);
@@ -145,13 +144,13 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
         for (const item of data) {
             const name = getVal(item, 'Товар');
             const status = String(getVal(item, 'Статус') || '').toLowerCase();
+            const orderId = String(getVal(item, 'Номер заказа') || ''); // 👈 Берем номер заказа
             
             if (name && (status.includes('доставлен') || status.includes('выполнен'))) {
                 const qty = parseNum(getVal(item, 'Кол-во'));
                 const sell = parseNum(getVal(item, 'Цена продажи'));
                 let buy = parseNum(getVal(item, 'Себестоимость'));
                 
-                // Шукаємо товар, щоб підтягнути власника
                 let product = await Product.findOne({ name: name.trim() });
                 if (buy === 0 && product) buy = product.buyingPrice;
                 
@@ -159,6 +158,7 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
                 if (profit === 0) profit = (sell - buy) * qty;
 
                 await Sale.create({
+                    orderId: orderId, // 👈 Сохраняем номер заказа
                     productName: name.trim(),
                     orderStatus: status,
                     quantity: qty,
@@ -171,7 +171,7 @@ app.post('/upload-sales', upload.single('file'), async (req, res) => {
             }
         }
         fs.unlinkSync(req.file.path);
-        res.json({ message: `Оброблено ${added} продажів` });
+        res.json({ message: `Оброблено ${added} позицій` });
     } catch (e) { res.status(500).send(e); }
 });
 
