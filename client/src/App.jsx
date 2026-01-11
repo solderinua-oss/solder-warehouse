@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
-import { Upload, Package, TrendingUp, RefreshCw, Search, ShoppingCart, AlertTriangle, ArrowRight, DollarSign } from 'lucide-react';
+import { Upload, Package, TrendingUp, RefreshCw, Search, AlertTriangle } from 'lucide-react';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
@@ -41,7 +41,7 @@ function App() {
       await axios.post(`${API_URL}${endpoint}`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
-      alert('✅ Успішно оновлено!');
+      alert('✅ Успішно оновлено! Зачекайте хвилинку, сервер обробляє дані.');
       fetchData(); 
     } catch (error) {
       alert('❌ Помилка завантаження');
@@ -49,52 +49,79 @@ function App() {
     setLoading(false);
   };
 
-  // --- 🔥 MONEYBALL АНАЛІТИКА ---
+  // --- 🔥 MONEYBALL АНАЛІТИКА (ВИПРАВЛЕНА) ---
   const analyzedProducts = useMemo(() => {
     if (!products.length || !salesHistory.length) return [];
 
-    // 1. Рахуємо продажі по кожному товару за останні 90 днів
+    // Функція очищення назв для порівняння (щоб T12-C4 і "T12-C4" були однакові)
+    const normalize = (str) => {
+        if (!str) return '';
+        return String(str).toLowerCase()
+            .replace(/['"«»]/g, '') // Видаляємо лапки
+            .replace(/[^a-z0-9а-яіїєґ]/g, '') // Лишаємо тільки букви і цифри
+            .trim();
+    };
+
+    // 1. Рахуємо продажі (Нормалізуємо назви!)
     const salesMap = {};
     const now = new Date();
-    const cutoffDate = new Date();
-    cutoffDate.setDate(now.getDate() - 90);
-
+    
     salesHistory.forEach(sale => {
-      if (new Date(sale.date) >= cutoffDate) {
-        salesMap[sale.productName] = (salesMap[sale.productName] || 0) + sale.quantity;
+      // Беремо продажі за останні 120 днів для кращої статистики
+      const saleDate = new Date(sale.date);
+      const diffTime = Math.abs(now - saleDate);
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+
+      if (diffDays <= 120) {
+        const key = normalize(sale.productName);
+        salesMap[key] = (salesMap[key] || 0) + sale.quantity;
       }
     });
 
     return products.map(p => {
-        const soldLast90Days = salesMap[p.name] || 0;
-        const velocity = soldLast90Days / 90; // Продаж в день
+        const cleanName = normalize(p.name);
+        // Шукаємо по назві або по артикулу (якщо є в назві)
+        let soldQty = salesMap[cleanName] || 0;
+
+        // Додатковий пошук: якщо назва не співпала, шукаємо часткове входження
+        if (soldQty === 0) {
+            Object.keys(salesMap).forEach(key => {
+                if (cleanName.includes(key) || key.includes(cleanName)) {
+                    soldQty += salesMap[key];
+                }
+            });
+        }
+
+        const velocity = soldQty / 120; // Середні продажі в день за 4 місяці
         
-        // 2. Розрахунок ROI
         let roi = 0;
         if (p.buyingPrice > 0) {
             roi = ((p.sellingPrice - p.buyingPrice) / p.buyingPrice) * 100;
         }
 
-        // 3. ROP (Точка перезамовлення)
-        // Логіка: (Швидкість * 21 день доставки) + (Швидкість * 7 днів запасу)
-        const leadTime = 21;
-        const safetyStockDays = 7;
+        // --- ЛОГІКА ЗАМОВЛЕННЯ ---
+        const leadTime = 21; // Дні доставки
+        const safetyStockDays = 14; // 🔥 Збільшив буфер до 14 днів (було 7)
+        
+        // ROP (Точка замовлення): Коли на складі лишиться стільки штук -> замовляй
         const rop = Math.ceil(velocity * (leadTime + safetyStockDays));
 
-        // 4. Рекомендоване замовлення
-        // Якщо ROI > 30% (Манібол) -> Запас на 60 днів
-        // Якщо ROI < 30% (Дорогі) -> Запас на 30 днів
-        const daysToStock = roi > 30 ? 60 : 30;
-        const recommendedOrder = Math.ceil(velocity * daysToStock);
+        // Скільки замовляти:
+        // Якщо товар дорогий (>1500 грн) -> запас на 1.5 місяці
+        // Якщо дешевий -> запас на 2.5 місяці
+        const stockDays = p.buyingPrice > 1500 ? 45 : 75;
+        const recommendedOrder = Math.ceil(velocity * stockDays);
 
         // Статус
         let status = 'ok';
-        if (p.quantity <= rop && velocity > 0) status = 'reorder';
-        if (velocity === 0 && p.quantity > 0) status = 'dead';
+        // Показуємо 'reorder' тільки якщо товар реально продається (velocity > 0.05)
+        if (p.quantity <= rop && velocity > 0.05) status = 'reorder';
+        
+        // Якщо товару 0 і продажів 0 - це не reorder, це просто мертвий товар
+        if (p.quantity === 0 && velocity === 0) status = 'dead';
 
         return { ...p, velocity, roi, rop, recommendedOrder, status };
     }).sort((a, b) => {
-        // Сортуємо: спочатку ті, що треба замовити, потім по швидкості продажів
         if (a.status === 'reorder' && b.status !== 'reorder') return -1;
         if (a.status !== 'reorder' && b.status === 'reorder') return 1;
         return b.velocity - a.velocity;
@@ -151,17 +178,18 @@ function App() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {analyzedProducts.filter(p => p.status === 'reorder').map(p => (
-                        <div key={p._id} className="bg-slate-900 p-4 rounded-xl border-l-4 border-red-500 flex justify-between items-center">
+                        <div key={p._id} className="bg-slate-900 p-4 rounded-xl border-l-4 border-red-500 flex justify-between items-center shadow-lg">
                             <div>
-                                <h4 className="font-bold text-sm text-slate-200 truncate w-40 md:w-56">{p.name}</h4>
+                                <h4 className="font-bold text-sm text-slate-200 truncate w-40 md:w-56" title={p.name}>{p.name}</h4>
                                 <p className="text-xs text-slate-500 mt-1">
-                                    На складі: <b className="text-white">{p.quantity}</b> шт. 
-                                    (Поріг: {p.rop})
+                                    Є: <b className="text-white text-lg">{p.quantity}</b> 
+                                    <span className="mx-2">|</span> 
+                                    Мін: <b className="text-red-400">{p.rop}</b>
                                 </p>
                             </div>
                             <div className="text-right">
                                 <span className="text-[10px] text-slate-400 uppercase font-bold">Купити</span>
-                                <div className="text-xl font-black text-white">+{p.recommendedOrder}</div>
+                                <div className="text-2xl font-black text-white">+{p.recommendedOrder}</div>
                             </div>
                         </div>
                     ))}
