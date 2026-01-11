@@ -2,13 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js';
 import { Doughnut } from 'react-chartjs-2';
-import { Upload, Package, TrendingUp, RefreshCw, Search, AlertTriangle, Star, DollarSign, Activity } from 'lucide-react';
+import { Upload, Package, TrendingUp, RefreshCw, Search, AlertTriangle, Star, DollarSign, Activity, Users, Calendar } from 'lucide-react';
 
 ChartJS.register(ArcElement, Tooltip, Legend);
 
 function App() {
   const [products, setProducts] = useState([]);
-  const [salesStats, setSalesStats] = useState({ profit: 0, revenue: 0, count: 0 });
+  const [salesStats, setSalesStats] = useState({ profit: 0, revenue: 0, count: 0, myShare: 0, fatherShare: 0 });
   const [salesHistory, setSalesHistory] = useState([]); 
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -34,63 +34,77 @@ function App() {
     setLoading(true);
     try {
       await axios.post(`${API_URL}${endpoint}`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-      alert('✅ Дані завантажено!');
+      alert('✅ Дані успішно завантажено!');
       fetchData(); 
-    } catch (e) { alert('❌ Помилка'); }
+    } catch (e) { alert('❌ Помилка завантаження'); }
     setLoading(false);
   };
 
+  // --- 📊 РОЗРАХУНОК МІСЯЧНОГО ПРИБУТКУ ТА ДОЛЕЙ ---
+  const currentMonthStats = useMemo(() => {
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    let monthProfit = 0;
+    let myMonthShare = 0;
+    let fatherMonthShare = 0;
+
+    salesHistory.forEach(sale => {
+      const saleDate = new Date(sale.date);
+      if (saleDate.getMonth() === currentMonth && saleDate.getFullYear() === currentYear) {
+        const p = sale.profit || 0;
+        monthProfit += p;
+        if (sale.owner === 'Я') myMonthShare += p;
+        else if (sale.owner === 'Отець') fatherMonthShare += p;
+        else { myMonthShare += p / 2; fatherMonthShare += p / 2; }
+      }
+    });
+
+    return { monthProfit, myMonthShare, fatherMonthShare };
+  }, [salesHistory]);
+
+  // --- 🔥 MONEYBALL АНАЛІТИКА (PVS + ROP) ---
   const analyzed = useMemo(() => {
     if (!products.length || !salesHistory.length) return { all: [], moneyball: [] };
-
     const normalize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9а-яіїєґ]/g, '').trim();
 
-    // Розрахунок швидкості та волатильності
-    const salesData = {};
+    const salesMap = {};
     salesHistory.forEach(s => {
       const key = normalize(s.productName);
-      if (!salesData[key]) salesData[key] = [];
-      salesData[key].push(s.quantity);
+      salesMap[key] = (salesMap[key] || 0) + s.quantity;
     });
 
     const items = products.map(p => {
-      const key = normalize(p.name);
+      const nameKey = normalize(p.name);
       const artKey = normalize(p.article);
-      let totalSold = 0;
-      
-      // Співставлення
-      Object.keys(salesData).forEach(k => {
-        if (k === key || (artKey && k.includes(artKey))) {
-          totalSold += salesData[k].reduce((a, b) => a + b, 0);
-        }
-      });
+      let totalSold = salesMap[nameKey] || 0;
+      if (totalSold === 0 && artKey) {
+        Object.keys(salesMap).forEach(k => { if (k.includes(artKey) || artKey.includes(k)) totalSold += salesMap[k]; });
+      }
 
-      const velocity = totalSold / 90; // за 3 місяці
+      const velocity = totalSold / 90; 
       const profitPerUnit = p.sellingPrice - p.buyingPrice;
       const roi = p.buyingPrice > 0 ? (profitPerUnit / p.buyingPrice) * 100 : 0;
-      
-      // Moneyball Formula: Product Value Score
       const pvs = p.buyingPrice > 0 ? (velocity * profitPerUnit) / p.buyingPrice : 0;
 
-      // Точка замовлення (ROP) за формулою Safety Stock
-      const isTip = p.name.toLowerCase().includes('жало');
+      const isTip = p.name.toLowerCase().includes('жало') || p.category?.toLowerCase().includes('жала');
       const leadTime = 21;
-      const safetyBuffer = isTip ? 14 : 7;
+      const safety = isTip ? 14 : 7;
       
-      let rop = Math.ceil(velocity * (leadTime + safetyBuffer));
-      if (isTip && rop < 35) rop = 35; // Твоя умова для жал
+      let rop = Math.ceil(velocity * (leadTime + safety));
+      if (isTip && velocity > 0 && rop < 35) rop = 35; // Поріг 35 для жал
       if (velocity > 0 && rop === 0) rop = 1;
 
-      // Скільки купувати
       const orderDays = isTip ? 75 : (p.buyingPrice > 1500 ? 30 : 45);
-      const orderQty = Math.ceil(velocity * orderDays) || (isTip ? 30 : 5);
+      const orderQty = Math.ceil(velocity * orderDays) || (isTip ? 35 : 5);
 
       return { ...p, velocity, roi, pvs, rop, orderQty, isTip };
     });
 
     return {
       all: items.sort((a, b) => b.velocity - a.velocity),
-      moneyball: items.filter(i => i.pvs > 0.05).sort((a, b) => b.pvs - a.pvs).slice(0, 10)
+      moneyball: items.filter(i => i.pvs > 0.01).sort((a, b) => b.pvs - a.pvs).slice(0, 10)
     };
   }, [products, salesHistory]);
 
@@ -98,84 +112,135 @@ function App() {
     <div className="min-h-screen bg-[#020617] text-slate-300 p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-8">
         
-        {/* STATS BAR */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
-                <p className="text-emerald-500 text-[10px] font-black uppercase tracking-widest">Прибуток</p>
-                <h2 className="text-3xl font-black text-white">+{salesStats.profit.toLocaleString()} ₴</h2>
-            </div>
-            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
-                <p className="text-blue-500 text-[10px] font-black uppercase tracking-widest">Оборот</p>
-                <h2 className="text-3xl font-black text-white">{salesStats.revenue.toLocaleString()} ₴</h2>
-            </div>
-            <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl col-span-2 flex justify-end gap-4">
-                <div className="relative overflow-hidden group">
+        {/* HEADER */}
+        <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+            <h1 className="text-3xl font-black text-white flex items-center gap-3">
+                <Target className="text-blue-500" size={32}/> SOLDER WAREHOUSE <span className="text-blue-500 text-sm">MONEYBALL</span>
+            </h1>
+            <div className="flex gap-4">
+                <div className="relative group">
                     <input type="file" onChange={(e) => uploadFile(e.target.files[0], '/upload-sales')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                    <button className="h-full px-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl transition-all flex items-center gap-2">
-                        <TrendingUp size={18}/> Звіт Продажів
+                    <button className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-2xl shadow-lg transition-all flex items-center gap-2">
+                        <TrendingUp size={18}/> Завантажити Продажі
                     </button>
                 </div>
-                <div className="relative overflow-hidden group">
+                <div className="relative group">
                     <input type="file" onChange={(e) => uploadFile(e.target.files[0], '/upload')} className="absolute inset-0 opacity-0 cursor-pointer z-10" />
-                    <button className="h-full px-6 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-xl border border-slate-700 transition-all flex items-center gap-2">
-                        <Package size={18}/> Склад
+                    <button className="px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white font-bold rounded-2xl border border-slate-700 transition-all flex items-center gap-2">
+                        <Package size={18}/> Оновити Склад
                     </button>
+                </div>
+                <button onClick={fetchData} className="p-3 bg-slate-800 rounded-xl hover:bg-slate-700 border border-slate-700"><RefreshCw size={22} /></button>
+            </div>
+        </div>
+
+        {/* --- 💰 SECTION 1: ПРИБУТОК ЗА МІСЯЦЬ ТА ДОЛІ --- */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="bg-gradient-to-br from-blue-900/40 to-slate-900 p-8 rounded-3xl border border-blue-500/20 shadow-2xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-6 opacity-10 text-blue-400"><Calendar size={100} /></div>
+                <p className="text-blue-400 text-xs font-black uppercase tracking-widest">Прибуток за Січень 2026</p>
+                <h2 className="text-5xl font-black text-white mt-2">+{currentMonthStats.monthProfit.toLocaleString()} ₴</h2>
+                <div className="mt-8 grid grid-cols-2 gap-4">
+                    <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800">
+                        <p className="text-[10px] text-slate-500 font-bold uppercase">Моя доля (Січень)</p>
+                        <p className="text-lg font-black text-blue-400">+{currentMonthStats.myMonthShare.toLocaleString()} ₴</p>
+                    </div>
+                    <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800">
+                        <p className="text-[10px] text-slate-500 font-bold uppercase">Доля Батька (Січень)</p>
+                        <p className="text-lg font-black text-red-400">+{currentMonthStats.fatherMonthShare.toLocaleString()} ₴</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="lg:col-span-2 bg-slate-900 p-8 rounded-3xl border border-slate-800 flex flex-col md:flex-row gap-8 items-center">
+                <div className="flex-1 space-y-6">
+                    <h3 className="text-slate-400 font-black text-sm uppercase flex items-center gap-2">
+                        <Users size={18} className="text-blue-500" /> Загальний прибуток та долі
+                    </h3>
+                    <div className="grid grid-cols-2 gap-4">
+                        <div className="p-4 bg-slate-950 rounded-2xl border-l-4 border-blue-500">
+                            <p className="text-[10px] text-slate-500 font-bold uppercase">Всього Я</p>
+                            <p className="text-2xl font-black text-white">{salesStats.myShare.toLocaleString()} ₴</p>
+                        </div>
+                        <div className="p-4 bg-slate-950 rounded-2xl border-l-4 border-red-500">
+                            <p className="text-[10px] text-slate-500 font-bold uppercase">Всього Батько</p>
+                            <p className="text-2xl font-black text-white">{salesStats.fatherShare.toLocaleString()} ₴</p>
+                        </div>
+                    </div>
+                    <div className="pt-4 border-t border-slate-800">
+                         <p className="text-[10px] text-slate-500 font-bold uppercase">Загальний чистий прибуток (всі часи)</p>
+                         <h4 className="text-3xl font-black text-emerald-500">+{salesStats.profit.toLocaleString()} ₴</h4>
+                    </div>
+                </div>
+                <div className="w-48 h-48">
+                    <Doughnut data={{
+                        labels: ['Мій', 'Батька'],
+                        datasets: [{
+                            data: [salesStats.myShare || 1, salesStats.fatherShare || 1],
+                            backgroundColor: ['#3b82f6', '#ef4444'],
+                            borderWidth: 0,
+                            cutout: '80%'
+                        }]
+                    }} options={{ plugins: { legend: { display: false } } }} />
                 </div>
             </div>
         </div>
 
-        {/* MONEYBALL CORE */}
-        <div className="bg-slate-900 rounded-3xl p-8 border border-slate-800">
+        {/* --- ⭐ MONEYBALL CORE --- */}
+        <div className="bg-slate-900 rounded-3xl p-8 border border-slate-800 shadow-xl">
             <h3 className="text-emerald-500 font-black flex items-center gap-2 mb-8 uppercase text-sm tracking-widest">
-                <Star size={18} fill="currentColor"/> Moneyball Core (Найвищий PVS)
+                <Star size={18} fill="currentColor"/> Moneyball Core (Пріоритетні закупки)
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                 {analyzed.moneyball.map(p => (
-                    <div key={p._id} className="bg-slate-950 p-4 rounded-xl border-l-2 border-emerald-500">
-                        <p className="text-[9px] text-slate-500 font-bold uppercase truncate">{p.name}</p>
-                        <p className="text-xl font-black text-white mt-1">{(p.pvs * 100).toFixed(1)}</p>
-                        <p className="text-[8px] text-emerald-400 font-black uppercase mt-1">Efficiency Score</p>
+                    <div key={p._id} className="bg-slate-950 p-5 rounded-2xl border-l-2 border-emerald-500 hover:scale-105 transition-all">
+                        <p className="text-[9px] text-slate-500 font-black uppercase truncate">{p.name}</p>
+                        <p className="text-2xl font-black text-white mt-1">{(p.pvs * 100).toFixed(1)}</p>
+                        <p className="text-[8px] text-emerald-400 font-black uppercase mt-1">PVS Efficiency</p>
                     </div>
                 ))}
             </div>
         </div>
 
-        {/* FULL TABLE */}
+        {/* --- 📊 INVENTORY CONTROL --- */}
         <div className="bg-slate-900 rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
-            <div className="p-6 border-b border-slate-800 flex justify-between items-center">
-                <div className="flex items-center gap-2">
+            <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                <div className="flex items-center gap-3">
                     <Activity size={20} className="text-blue-500" />
-                    <h3 className="font-black uppercase text-xs tracking-tighter">Inventory Control</h3>
+                    <h3 className="font-black uppercase text-xs tracking-widest text-white">Керування складом</h3>
                 </div>
-                <input type="text" placeholder="Пошук..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm outline-none w-64 focus:ring-1 focus:ring-blue-500"/>
+                <div className="relative">
+                    <Search className="absolute left-3 top-2.5 text-slate-600" size={16} />
+                    <input type="text" placeholder="Пошук товару..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+                        className="bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm outline-none w-72 focus:ring-1 focus:ring-blue-500"/>
+                </div>
             </div>
             <div className="overflow-x-auto">
                 <table className="w-full text-left">
-                    <thead className="bg-slate-800/40 text-[9px] font-black uppercase text-slate-500">
+                    <thead className="bg-slate-800/40 text-[9px] font-black uppercase text-slate-500 tracking-wider">
                         <tr>
-                            <th className="p-5">Товар</th>
+                            <th className="p-5">Назва</th>
                             <th className="p-5 text-center">ROI %</th>
-                            <th className="p-5 text-center">Продаж/День</th>
+                            <th className="p-5 text-center">Швидкість</th>
                             <th className="p-5 text-center">Поріг (Min)</th>
                             <th className="p-5 text-center">На складі</th>
-                            <th className="p-5 text-right">Закупка</th>
+                            <th className="p-5 text-right">Дія</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
                         {analyzed.all.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).map(p => (
-                            <tr key={p._id} className={`hover:bg-slate-800/20 transition-all ${p.quantity <= p.rop && p.velocity > 0 ? 'bg-red-500/[0.03]' : ''}`}>
+                            <tr key={p._id} className={`hover:bg-slate-800/30 transition-all ${p.quantity <= p.rop && p.velocity > 0 ? 'bg-red-500/[0.05]' : ''}`}>
                                 <td className="p-5">
                                     <div className="font-bold text-sm text-slate-200">{p.name}</div>
-                                    <div className="text-[10px] text-slate-600 font-mono mt-0.5">{p.article}</div>
+                                    <div className="text-[10px] text-slate-600 font-bold mt-1 uppercase">{p.owner} • {p.category}</div>
                                 </td>
                                 <td className="p-5 text-center">
                                     <span className={`text-[10px] font-black px-2 py-1 rounded ${p.roi > 50 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-slate-800 text-slate-500'}`}>
                                         {p.roi.toFixed(0)}%
                                     </span>
                                 </td>
-                                <td className="p-5 text-center font-mono text-xs">{p.velocity.toFixed(2)}</td>
-                                <td className="p-5 text-center font-bold text-sm text-slate-500">{p.rop}</td>
+                                <td className="p-5 text-center font-mono text-xs text-slate-400">{p.velocity.toFixed(2)}</td>
+                                <td className="p-5 text-center font-bold text-slate-500">{p.rop}</td>
                                 <td className="p-5 text-center">
                                     <span className={`text-xl font-black ${p.quantity <= p.rop && p.velocity > 0 ? 'text-red-500' : 'text-white'}`}>
                                         {p.quantity}
@@ -183,11 +248,13 @@ function App() {
                                 </td>
                                 <td className="p-5 text-right">
                                     {p.quantity <= p.rop && p.velocity > 0 ? (
-                                        <div className="inline-block bg-red-600 text-white px-3 py-1 rounded text-[10px] font-black uppercase">
-                                            Купити +{p.orderQty}
+                                        <div className="flex flex-col items-end">
+                                            <span className="bg-red-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-black uppercase shadow-lg shadow-red-900/20">
+                                                Замовити +{p.orderQty}
+                                            </span>
                                         </div>
                                     ) : (
-                                        <span className="text-emerald-600 font-bold text-[10px] uppercase">Ок</span>
+                                        <span className="text-emerald-600 font-bold text-[10px] uppercase">В наявності</span>
                                     )}
                                 </td>
                             </tr>
